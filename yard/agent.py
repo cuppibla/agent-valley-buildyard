@@ -28,7 +28,8 @@ from google.adk.events import EventActions
 from google.adk.workflow import JoinNode
 from google.genai import types
 
-from forge.agent.backends import get_backend, shrink
+from forge.agent.backends import shrink
+from yard.scene import render_site
 
 MODEL = "gemini-3-flash-preview"
 
@@ -88,22 +89,6 @@ join = JoinNode(name="join")
 
 
 # ── the one node that draws ─────────────────────────────────────────────────
-STYLE = (
-    "Cute low-poly art style — faceted geometric shapes with soft flat shading, in the "
-    "gentle Monument Valley / Alto's Odyssey aesthetic. Big soft expressive eyes, sweet "
-    "friendly faces, warm pastel colours, soft gradient light, plain pastel background, "
-    "centered, charming and adorable. No text, no logos."
-)
-
-# Naming the crew is not decoration. Pinning holds the building but not the cast:
-# when a well was added on a later turn it took the badger's corner and the badger
-# simply stopped existing. Say they are all still there, every time.
-CREW_LINE = (
-    "three little animal builders still at work on it — a fox on the roof, a rabbit at "
-    "the door, a badger in the garden"
-)
-
-
 def _parts(node_input: Any) -> list[str]:
     """The join hands down a dict keyed by branch. Read it in a fixed order so the
     prompt is stable even though the branches finish in whatever order they like."""
@@ -122,15 +107,13 @@ async def render(node_input: Any):
     roof_txt, door_txt, garden_txt = _parts(node_input)
     built = f"{roof_txt}; {door_txt}; {garden_txt}"
 
-    sheet = f"a small half-built cottage with {built}, and {CREW_LINE}"
-    result = await asyncio.to_thread(
-        get_backend().render,
-        sheet=sheet, form="the site so far", reference_seed="yard",
-    )
+    # yard.scene, not the shared backend: that one's no-reference prompt insists on
+    # a familiar, so a cottage came back as a cat's face. A place needs its own prompt.
+    png = await asyncio.to_thread(render_site, built)
     yield Event(
         message=[
             types.Part.from_text(text=f"built: {built}"),
-            types.Part.from_bytes(data=shrink(result.png), mime_type="image/jpeg"),
+            types.Part.from_bytes(data=shrink(png), mime_type="image/jpeg"),
         ],
         output={"built": [roof_txt, door_txt, garden_txt]},
     )

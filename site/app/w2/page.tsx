@@ -29,6 +29,7 @@ export default function Buildyard() {
   const [work, setWork] = useState<number | undefined>();
   const [graphErr, setGraphErr] = useState<string | null>(null);
   const [rejected, setRejected] = useState(false);
+  const [fanoutNames, setFanoutNames] = useState<string[]>([]);
   const sid = useRef<string>("");
   // Only the fan-out counts. Summing every node would compare 12s of parallel work
   // against a wall clock that also contains two image renders — a true number that
@@ -36,6 +37,7 @@ export default function Buildyard() {
   const fanout = useRef<string[]>([]);
   const fanWork = useRef(0);
   const fanStart = useRef(0);
+  const fanRan = useRef(0);       // branches in THIS round of the fan-out
 
   // The crew row is built from the learner's own edges, so it is right before a
   // single build has been run — and wrong the moment they add an edge and reload.
@@ -43,8 +45,11 @@ export default function Buildyard() {
     const r = await fetch("/api/w2/graph").then((x) => x.json()).catch(() => null);
     const g = r?.graph;
     setGraphErr(r?.graph_error ?? (g ? null : "the yard agent isn't running — bash valley.sh"));
-    if (g) setCrew(g.nodes.filter((n: string) => n !== "join")
-      .map((n: string) => ({ name: n, state: "idle" as NodeState })));
+    if (g) {
+      setCrew(g.nodes.filter((n: string) => n !== "join")
+        .map((n: string) => ({ name: n, state: "idle" as NodeState })));
+      setFanoutNames(g.fanout ?? []);
+    }
   }, []);
   useEffect(() => { loadGraph(); }, [loadGraph]);
 
@@ -64,7 +69,7 @@ export default function Buildyard() {
     setEvents([]); setJoin(null); setWall(undefined); setWork(undefined);
     setCrew((c) => c.map((n) => ({ ...n, state: "idle", ms: undefined })));
 
-    fanWork.current = 0; fanStart.current = 0;
+    fanWork.current = 0; fanStart.current = 0; fanRan.current = 0;
     const res = await fetch("/api/w2/build", {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ request: msg, session_id: sid.current || undefined }),
@@ -89,17 +94,26 @@ export default function Buildyard() {
           setCrew(d.graph.nodes.filter((n: string) => n !== "join")
             .map((n: string) => ({ name: n, state: "idle" as NodeState })));
           fanout.current = d.graph.fanout ?? [];
+          setFanoutNames(d.graph.fanout ?? []);
           setJoin({ have: 0, of: d.graph.fanout.length || 1, done: false });
         } else if (d.kind === "node.start") {
-          if (fanout.current.includes(d.node) && !fanStart.current) fanStart.current = Date.now();
+          if (fanout.current.includes(d.node)) {
+            // A rework re-runs one branch. Rolling it into the round that had three
+            // would turn "9.6s of wall clock against 23.7s of work" into a pair of
+            // numbers that are true and prove nothing.
+            if (!fanStart.current) { fanStart.current = Date.now(); fanWork.current = 0; fanRan.current = 0; }
+            fanRan.current += 1;
+          }
           setNode(d.node, "live");
           push("node", `${d.node} · running`);
         } else if (d.kind === "node.done") {
           setNode(d.node, "done", { ms: d.ms, text: d.text });
           if (fanout.current.includes(d.node)) {
             fanWork.current += (d.ms ?? 0) / 1000;
-            setWork(fanWork.current);
-            setWall((Date.now() - fanStart.current) / 1000);
+            if (fanRan.current > 1) {          // one branch alone says nothing
+              setWork(fanWork.current);
+              setWall((Date.now() - fanStart.current) / 1000);
+            }
           }
           push("node", `${d.node} · done ${(d.ms / 1000).toFixed(1)}s`);
         } else if (d.kind === "join.wait") {
@@ -107,6 +121,7 @@ export default function Buildyard() {
           push("join", `waiting · ${d.have} of ${d.of}`);
         } else if (d.kind === "join.done") {
           setJoin((j) => ({ have: j?.of ?? 3, of: j?.of ?? 3, done: true }));
+          fanStart.current = 0;               // the next round starts its own clock
           push("join", `branches joined: ${d.branches.length}`);
         } else if (d.kind === "render") {
           setPlot(d.image);
@@ -179,7 +194,7 @@ export default function Buildyard() {
         </div>
       </div>
 
-      <CrewRow crew={crew} join={join} wall={wall} work={work} />
+      <CrewRow crew={crew} join={join} fanout={fanoutNames} wall={wall} work={work} />
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, alignItems: "stretch" }}>
         <div className="glass" style={{ padding: 16 }}>

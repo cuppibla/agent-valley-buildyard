@@ -24,8 +24,10 @@ const FACE: Record<string, string> = {
   door: "/world/npc/crew-door.jpg",
   garden: "/world/npc/crew-garden.jpg",
   inspect: "/world/npc/twill.jpg",
+  render: "/world/npc/maren.jpg",
+  finish: "/world/npc/vesper.jpg",
 };
-const GLYPH: Record<string, string> = { render: "🎨", finish: "✅", join: "⏳" };
+const GLYPH: Record<string, string> = { join: "⏳" };
 
 export default function CrewRow(
   { crew, join, fanout = [], wall, work }:

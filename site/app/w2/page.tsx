@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import DialogueBox from "@/components/DialogueBox";
 import RuntimeInspector from "@/components/RuntimeInspector";
 import CrewRow, { type Crew, type NodeState } from "@/components/CrewRow";
+import YardMap, { type Topo } from "@/components/YardMap";
 import type { TraceEvent } from "@/lib/contracts";
 import { updateSave } from "@/lib/save";
 
@@ -30,6 +31,8 @@ export default function Buildyard() {
   const [graphErr, setGraphErr] = useState<string | null>(null);
   const [rejected, setRejected] = useState(false);
   const [fanoutNames, setFanoutNames] = useState<string[]>([]);
+  const [topo, setTopo] = useState<Topo | null>(null);
+  const [activeRoute, setActiveRoute] = useState<string | null>(null);
   const sid = useRef<string>("");
   // Only the fan-out counts. Summing every node would compare 12s of parallel work
   // against a wall clock that also contains two image renders — a true number that
@@ -49,6 +52,7 @@ export default function Buildyard() {
       setCrew(g.nodes.filter((n: string) => n !== "join")
         .map((n: string) => ({ name: n, state: "idle" as NodeState })));
       setFanoutNames(g.fanout ?? []);
+      setTopo(g);
     }
   }, []);
   useEffect(() => { loadGraph(); }, [loadGraph]);
@@ -65,7 +69,7 @@ export default function Buildyard() {
   async function build(text?: string) {
     const msg = (text ?? request).trim();
     if (busy || !msg) return;
-    setBusy(true); setRejected(false); setLine("Right. Crew!");
+    setBusy(true); setRejected(false); setActiveRoute(null); setLine("Right. Crew!");
     setEvents([]); setJoin(null); setWall(undefined); setWork(undefined);
     setCrew((c) => c.map((n) => ({ ...n, state: "idle", ms: undefined })));
 
@@ -95,6 +99,7 @@ export default function Buildyard() {
             .map((n: string) => ({ name: n, state: "idle" as NodeState })));
           fanout.current = d.graph.fanout ?? [];
           setFanoutNames(d.graph.fanout ?? []);
+          setTopo(d.graph); setActiveRoute(null);
           setJoin({ have: 0, of: d.graph.fanout.length || 1, done: false });
         } else if (d.kind === "node.start") {
           if (fanout.current.includes(d.node)) {
@@ -142,6 +147,7 @@ export default function Buildyard() {
           } else {
             setRejected(false); setLine(d.why || "that will stand");
           }
+          setActiveRoute(d.route);
           push("route", `${d.from} → ${d.to} · ${d.route}`);
         } else if (d.kind === "error") {
           setLine(d.message); push("error", d.message);
@@ -193,6 +199,9 @@ export default function Buildyard() {
           ))}
         </div>
       </div>
+
+      <YardMap topo={topo} states={Object.fromEntries(crew.map((c) => [c.name, c.state]))}
+        activeRoute={activeRoute} />
 
       <CrewRow crew={crew} join={join} fanout={fanoutNames} wall={wall} work={work} />
 

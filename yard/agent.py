@@ -174,10 +174,16 @@ root_agent = Workflow(
     name="yard",
     description="Survey a plot, draw it, build it with three crews at once, inspect it.",
     edges=[
-        ("START", survey, blueprint,
-         (roof, door, garden),          # ← edit two: the brackets are the fan-out
-         join, render, inspect,
-         {"rework": door,               # ← edit three: the way back
-          "pass": finish}),
+        ("START", survey,
+
+         # 👉 EDIT ONE — chapter 2. Add `blueprint,` on the next line, then save.
+
+         # 👉 EDIT TWO — chapter 3. Add `(roof, door, garden), join, render, inspect,`
+         #    on the next line. The brackets are the whole syntax of "at the same time".
+
+         # 👉 EDIT THREE — chapter 4. Add `{"rework": door, "pass": finish},` on the
+         #    next line. A dict is "whichever way the inspector pointed".
+
+         ),
     ],
 )

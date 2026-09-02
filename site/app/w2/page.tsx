@@ -2,8 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import DialogueBox from "@/components/DialogueBox";
 import RuntimeInspector from "@/components/RuntimeInspector";
-import CrewRow, { type Crew, type NodeState } from "@/components/CrewRow";
-import YardMap, { type Topo } from "@/components/YardMap";
+import YardMap, { type NodeState, type Topo } from "@/components/YardMap";
 import type { TraceEvent } from "@/lib/contracts";
 import { updateSave } from "@/lib/save";
 
@@ -14,6 +13,7 @@ const SUGGESTIONS = [
   "a hut that smells of pine",
 ];
 
+type Crew = { name: string; state: NodeState; ms?: number; text?: string };
 type Built = { part: string; struck?: boolean };
 
 export default function Buildyard() {
@@ -200,10 +200,10 @@ export default function Buildyard() {
         </div>
       </div>
 
-      <YardMap topo={topo} states={Object.fromEntries(crew.map((c) => [c.name, c.state]))}
-        activeRoute={activeRoute} />
-
-      <CrewRow crew={crew} join={join} fanout={fanoutNames} wall={wall} work={work} />
+      <YardMap topo={topo}
+        states={Object.fromEntries(crew.map((c) => [c.name, c.state]))}
+        times={Object.fromEntries(crew.filter((c) => c.ms).map((c) => [c.name, c.ms!]))}
+        join={join} activeRoute={activeRoute} wall={wall} work={work} />
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, alignItems: "stretch" }}>
         <div className="glass" style={{ padding: 16 }}>

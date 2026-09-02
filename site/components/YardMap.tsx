@@ -1,20 +1,22 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { NodeState } from "@/components/CrewRow";
 
-/** The graph, drawn — and someone running along it.
+/** The graph and the yard, which turned out to be the same thing.
  *
- * Laid out from the topology the agent reported, so this is the learner's own
- * graph: add an edge and a box appears here.
+ * Each node is a card ON the graph: a face, a name, what it is doing, how long it
+ * took. Laid out from the topology the agent reported, so this is the learner's own
+ * graph — add an edge and a card appears.
  *
- * The runners are the point. During the fan-out there are three of them moving at
- * once, on three different edges, and none of them reaches `render` until the join
- * has all three. Nothing else on the screen says "at the same time" as plainly as
- * three animals crossing the picture together.
+ * The faces travel. A node's avatar flies in from the node it came FROM and settles
+ * into its seat, so during the fan-out three of them cross the picture at once and
+ * none reaches `render` until the join has all three. That is the lesson, and it
+ * needs no caption.
  */
 
+export type NodeState = "idle" | "live" | "done" | "redo";
 export type Topo = { nodes: string[]; edges: { from: string; to: string; route: string | null }[];
   fanout: string[] };
+type Join = { have: number; of: number; done: boolean } | null;
 
 const AVATAR: Record<string, string> = {
   survey: "/world/npc/odo.jpg",
@@ -22,113 +24,157 @@ const AVATAR: Record<string, string> = {
   roof: "/world/npc/crew-roof.jpg",
   door: "/world/npc/crew-door.jpg",
   garden: "/world/npc/crew-garden.jpg",
-  inspect: "/world/npc/twill.jpg",
   // Week one's forgekeeper draws the picture here too, and Vesper signs it off.
   render: "/world/npc/maren.jpg",
+  inspect: "/world/npc/twill.jpg",
   finish: "/world/npc/vesper.jpg",
 };
 
-const W = 96, H = 40, GAP_X = 132, GAP_Y = 58, PAD = 30;
+const W = 134, H = 56, R = 15;
+const GAP_X = 162, GAP_Y = 74, PAD = 26, TOP = 8;
 
 export default function YardMap(
-  { topo, states, activeRoute }:
-  { topo: Topo | null; states: Record<string, NodeState>; activeRoute?: string | null },
+  { topo, states, times, join, activeRoute, wall, work }:
+  { topo: Topo | null; states: Record<string, NodeState>; times: Record<string, number>;
+    join: Join; activeRoute?: string | null; wall?: number; work?: number },
 ) {
   const layout = useMemo(() => (topo ? rank(topo) : null), [topo]);
   const [runners, setRunners] = useState<{ key: string; x: number; y: number }[]>([]);
   const settled = useRef<Set<string>>(new Set());
 
-  // A runner is spawned at the node it came FROM and then moved, so the browser has
-  // something to animate between. Spawning it at its destination would just blink.
   useEffect(() => {
     if (!layout) return;
-    const live = Object.entries(states).filter(([, s]) => s === "live").map(([n]) => n);
-    setRunners((prev) => live.flatMap((n) => {
-      // A node can be live for one frame after the graph changed under it — the
-      // previous build's states arriving against the new layout.
-      const at = layout.pos[n];
+    const reached = Object.entries(states).filter(([, s]) => s !== "idle").map(([n]) => n);
+    setRunners((prev) => reached.flatMap((n) => {
+      const at = layout.slot[n];
       if (!at) return [];
-      const existing = prev.find((r) => r.key === n);
-      if (existing) return [{ ...existing, x: at.x, y: at.y }];
-      if (settled.current.has(n)) return [{ key: n, x: at.x, y: at.y }];
-      // __START__ has no box, and a back edge makes `inspect` a parent of `door`.
-      // Take the first parent that is actually on screen; fall back to standing still.
-      const from = (layout.parents[n] ?? []).find((p) => layout.pos[p]);
-      const start = from ? layout.pos[from] : at;
-      return [{ key: n, x: start.x, y: start.y }];
+      if (prev.some((r) => r.key === n) || settled.current.has(n)) return [{ key: n, ...at }];
+      // __START__ has no card, and the way-back edge makes `inspect` a parent of
+      // `door`: come from the first parent that is actually on screen.
+      const from = (layout.parents[n] ?? []).find((p) => layout.slot[p]);
+      return [{ key: n, ...(from ? layout.slot[from] : at) }];
     }));
     const id = requestAnimationFrame(() => {
-      live.forEach((n) => settled.current.add(n));
-      setRunners((prev) => prev.map((r) => (layout.pos[r.key] ? { ...r, ...layout.pos[r.key] } : r)));
+      reached.forEach((n) => settled.current.add(n));
+      setRunners((prev) => prev.map((r) => (layout.slot[r.key] ? { ...r, ...layout.slot[r.key] } : r)));
     });
     return () => cancelAnimationFrame(id);
   }, [states, layout]);
 
-  useEffect(() => { if (!Object.values(states).some((s) => s === "live")) settled.current.clear(); },
-    [states]);
+  useEffect(() => {
+    if (!Object.values(states).some((s) => s !== "idle")) settled.current.clear();
+  }, [states]);
 
   if (!layout) return null;
   const { pos, width, height } = layout;
+  const live = Object.values(states).filter((s) => s === "live").length;
 
   return (
-    <div className="glass" style={{ padding: "14px 16px", marginBottom: 14, overflowX: "auto" }}>
+    <div className="glass" style={{ padding: "14px 16px", marginBottom: 14 }}>
       <div className="mono" style={{ fontSize: 10.5, letterSpacing: ".14em",
-        color: "var(--faint)", textTransform: "uppercase", marginBottom: 6 }}>Your graph</div>
-      <svg viewBox={`0 0 ${width} ${height}`} width="100%"
-        style={{ minWidth: Math.min(width, 760), display: "block", overflow: "visible" }}
-        role="img" aria-label="the workflow, lighting up as it runs">
-        <defs>
-          <marker id="tip" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6"
-            orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="currentColor" /></marker>
-          {Object.keys(AVATAR).map((n) => (
-            <clipPath key={n} id={`clip-${n}`}><circle cx="15" cy="15" r="15" /></clipPath>
+        color: "var(--faint)", textTransform: "uppercase", marginBottom: 4 }}>The yard</div>
+
+      <div style={{ overflowX: "auto" }}>
+        <svg viewBox={`0 0 ${width} ${height}`} width="100%"
+          style={{ minWidth: Math.min(width, 700), display: "block" }}
+          role="img" aria-label="the workflow, lighting up as it runs">
+          <defs>
+            <marker id="tip" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="5.5" markerHeight="5.5"
+              orient="auto"><path d="M0 0 L8 4 L0 8 z" fill="currentColor" /></marker>
+            {Object.keys(AVATAR).map((n) => (
+              <clipPath key={n} id={`c-${n}`}><circle cx={R} cy={R} r={R} /></clipPath>
+            ))}
+          </defs>
+
+          {topo!.edges.filter((e) => pos[e.from] && pos[e.to]).map((e, i) => {
+            const back = pos[e.to].x <= pos[e.from].x;
+            const hot = e.route ? e.route === activeRoute
+              : states[e.from] === "done" && (states[e.to] ?? "idle") !== "idle";
+            const c = e.route === "rework" ? "var(--rose)"
+              : hot ? "var(--violet)" : "var(--line-strong)";
+            return (
+              <path key={i} d={edgePath(pos[e.from], pos[e.to], back)} fill="none" stroke={c}
+                strokeWidth={hot ? 2.2 : 1.3} strokeDasharray={e.route ? "5 4" : undefined}
+                opacity={hot ? 1 : .4} markerEnd="url(#tip)" color={c}
+                style={{ transition: "stroke .3s, opacity .3s, stroke-width .3s" }} />
+            );
+          })}
+
+          {topo!.nodes.filter((n) => pos[n]).map((n) => (
+            <Card key={n} n={n} at={pos[n]} state={states[n] ?? "idle"} ms={times[n]}
+              join={n === "join" ? join : null} />
           ))}
-        </defs>
 
-        {topo!.edges.filter((e) => pos[e.from] && pos[e.to]).map((e, i) => {
-          const back = pos[e.to].x <= pos[e.from].x;
-          const hot = e.route ? e.route === activeRoute
-            : states[e.from] === "done" && states[e.to] !== "idle";
-          const c = e.route === "rework" ? "var(--rose)" : hot ? "var(--violet)" : "var(--line-strong)";
-          return (
-            <path key={i} d={edgePath(pos[e.from], pos[e.to], back)} fill="none" stroke={c}
-              strokeWidth={hot ? 2.2 : 1.3} strokeDasharray={e.route ? "5 4" : undefined}
-              opacity={hot ? 1 : .45} markerEnd="url(#tip)" color={c}
-              style={{ transition: "stroke .3s, opacity .3s, stroke-width .3s" }} />
-          );
-        })}
-
-        {topo!.nodes.filter((n) => pos[n]).map((n) => {
-          const s = states[n] ?? "idle";
-          const tone = s === "done" ? { b: "rgba(111,199,173,.85)", f: "rgba(111,199,173,.16)" }
-            : s === "redo" ? { b: "var(--rose)", f: "rgba(229,138,168,.14)" }
-            : s === "live" ? { b: "var(--violet)", f: "rgba(255,255,255,.95)" }
-            : { b: "var(--line)", f: "rgba(255,255,255,.55)" };
-          return (
-            <g key={n} transform={`translate(${pos[n].x - W / 2},${pos[n].y - H / 2})`}
-              opacity={s === "idle" ? .55 : 1} style={{ transition: "opacity .3s" }}>
-              <rect width={W} height={H} rx={11} fill={tone.f} stroke={tone.b}
-                strokeWidth={s === "live" ? 2.2 : 1.2}
-                style={{ transition: "fill .3s, stroke .3s, stroke-width .3s" }} />
-              <text x={W / 2} y={H / 2 + 4.5} textAnchor="middle" fontSize="12.5" fontWeight="600"
-                fill="var(--ink)" fontFamily="var(--font-body), sans-serif">{n}</text>
+          {runners.map((r) => (
+            <g key={r.key} transform={`translate(${r.x},${r.y})`}
+              style={{ transition: "transform .7s cubic-bezier(.34,1.3,.5,1)" }}>
+              <image href={AVATAR[r.key] ?? "/world/npc/odo.jpg"} width={R * 2} height={R * 2}
+                clipPath={`url(#c-${r.key})`} />
+              <circle cx={R} cy={R} r={R} fill="none" strokeWidth="2"
+                stroke={states[r.key] === "live" ? "var(--violet)"
+                  : states[r.key] === "redo" ? "var(--rose)" : "rgba(111,199,173,.9)"}
+                style={{ transition: "stroke .3s" }} />
+              {states[r.key] === "live" && (
+                <animateTransform attributeName="transform" type="translate" additive="sum"
+                  values="0 0; 0 -3.5; 0 0" dur="0.7s" repeatCount="indefinite" />
+              )}
             </g>
-          );
-        })}
+          ))}
+        </svg>
+      </div>
 
-        {runners.map((r) => (
-          <g key={r.key} transform={`translate(${r.x - 15},${r.y - H / 2 - 34})`}
-            style={{ transition: "transform .65s cubic-bezier(.4,1.4,.5,1)" }}>
-            {AVATAR[r.key]
-              ? <image href={AVATAR[r.key]} width="30" height="30" clipPath={`url(#clip-${r.key})`} />
-              : <circle cx="15" cy="15" r="13" fill="var(--violet-soft)" />}
-            <circle cx="15" cy="15" r="15" fill="none" stroke="var(--violet)" strokeWidth="2" />
-            <animateTransform attributeName="transform" type="translate" additive="sum"
-              values="0 0; 0 -4; 0 0" dur="0.7s" repeatCount="indefinite" />
-          </g>
-        ))}
-      </svg>
+      <div className="mono" style={{ marginTop: 8, paddingTop: 9, fontSize: 11,
+        borderTop: "1px solid var(--line)", color: "var(--sub)", display: "flex",
+        gap: 16, flexWrap: "wrap" }}>
+        <span>running now · <b style={{ color: "var(--ink)" }}>{live}</b></span>
+        {wall != null && work != null && work > wall && (
+          <span>the three crews · <b style={{ color: "var(--ink)" }}>{wall.toFixed(1)}s</b> on the
+            wall clock, <b style={{ color: "var(--ink)" }}>{work.toFixed(1)}s</b> of work</span>
+        )}
+      </div>
     </div>
+  );
+}
+
+function Card({ n, at, state, ms, join }:
+  { n: string; at: { x: number; y: number }; state: NodeState; ms?: number; join: Join }) {
+  const tone = state === "done"
+      ? { b: "rgba(111,199,173,.8)", f: "rgba(111,199,173,.13)", t: "#2f7d67", bar: "var(--mint)" }
+    : state === "redo"
+      ? { b: "var(--rose)", f: "rgba(229,138,168,.12)", t: "#b03e64", bar: "var(--rose)" }
+    : state === "live"
+      ? { b: "var(--violet)", f: "rgba(255,255,255,.95)", t: "var(--violet)", bar: "var(--violet-soft)" }
+      : { b: "var(--line)", f: "rgba(255,255,255,.5)", t: "var(--faint)", bar: "var(--violet-soft)" };
+
+  const label = join
+    ? (join.done ? "branches joined" : `waiting · ${join.have} of ${join.of}`)
+    : state === "done" ? (ms ? `${(ms / 1000).toFixed(1)}s` : "done")
+    : state === "redo" ? "again" : state === "live" ? "working…" : "—";
+  const pct = join ? (join.done ? 100 : (join.have / Math.max(join.of, 1)) * 100)
+    : state === "done" || state === "redo" ? 100 : state === "live" ? 62 : 0;
+  const gold = !!join?.done;
+  const dim = state === "idle" && !join?.have && !gold;
+
+  return (
+    <g transform={`translate(${at.x - W / 2},${at.y - H / 2})`} opacity={dim ? .6 : 1}
+      style={{ transition: "opacity .3s" }}>
+      <rect width={W} height={H} rx={13} fill={gold ? "rgba(230,192,105,.15)" : tone.f}
+        stroke={gold ? "rgba(230,192,105,.8)" : tone.b} strokeWidth={state === "live" ? 2.2 : 1.2}
+        strokeDasharray={join ? "5 4" : undefined}
+        style={{ transition: "fill .3s, stroke .3s, stroke-width .3s" }} />
+      {/* the avatar's seat — the face itself is drawn in the runner layer above */}
+      <circle cx={12 + R} cy={H / 2 - 4} r={R} fill="rgba(176,143,224,.16)" />
+      {join && <text x={12 + R} y={H / 2 + 1} textAnchor="middle" fontSize="15">⏳</text>}
+      <text x={12 + R * 2 + 10} y={H / 2 - 5} fontSize="12.5" fontWeight="600" fill="var(--ink)"
+        fontFamily="var(--font-body), sans-serif"
+        style={{ textTransform: "capitalize" }}>{n}</text>
+      <text x={12 + R * 2 + 10} y={H / 2 + 10} fontSize="9.5"
+        fill={gold ? "var(--gold-deep)" : tone.t} fontFamily="var(--font-mono), monospace"
+        style={{ transition: "fill .3s" }}>{label}</text>
+      <rect x={12} y={H - 11} width={W - 24} height={3} rx={1.5} fill="rgba(176,143,224,.2)" />
+      <rect x={12} y={H - 11} width={(W - 24) * pct / 100} height={3} rx={1.5}
+        fill={gold ? "var(--gold)" : tone.bar} style={{ transition: "width .45s ease" }} />
+    </g>
   );
 }
 
@@ -151,24 +197,26 @@ function rank(topo: Topo) {
   topo.nodes.forEach((n) => { (cols[r[n]] ||= []).push(n); });
 
   const tallest = Math.max(...Object.values(cols).map((c) => c.length));
-  const height = PAD * 2 + (tallest - 1) * GAP_Y + H + 34;
-  const width = PAD * 2 + Math.max(...Object.keys(cols).map(Number)) * GAP_X + W;
+  const lastCol = Math.max(...Object.keys(cols).map(Number));
+  const height = TOP + PAD * 2 + (tallest - 1) * GAP_Y + H + 26;
+  const width = PAD * 2 + lastCol * GAP_X + W;
 
   const pos: Record<string, { x: number; y: number }> = {};
+  const slot: Record<string, { x: number; y: number }> = {};
   Object.entries(cols).forEach(([col, names]) => {
     names.forEach((n, i) => {
-      pos[n] = {
-        x: PAD + Number(col) * GAP_X + W / 2,
-        y: PAD + 34 + (i - (names.length - 1) / 2) * GAP_Y + (tallest - 1) * GAP_Y / 2 + H / 2,
-      };
+      const x = PAD + Number(col) * GAP_X + W / 2;
+      const y = TOP + PAD + (i - (names.length - 1) / 2) * GAP_Y + (tallest - 1) * GAP_Y / 2 + H / 2;
+      pos[n] = { x, y };
+      slot[n] = { x: x - W / 2 + 12, y: y - 4 - R };      // where the face sits
     });
   });
-  return { pos, parents, width, height };
+  return { pos, slot, parents, width, height };
 }
 
 function edgePath(a: { x: number; y: number }, b: { x: number; y: number }, back: boolean) {
   if (back) {
-    const lift = 46;
+    const lift = 40;
     return `M ${a.x} ${a.y + H / 2} C ${a.x} ${a.y + H / 2 + lift}, ${b.x} ${b.y + H / 2 + lift}, ${b.x} ${b.y + H / 2}`;
   }
   const ax = a.x + W / 2, bx = b.x - W / 2, mid = (ax + bx) / 2;

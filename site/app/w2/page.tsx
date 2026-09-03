@@ -6,6 +6,13 @@ import YardMap, { type NodeState, type Topo } from "@/components/YardMap";
 import type { TraceEvent } from "@/lib/contracts";
 import { updateSave } from "@/lib/save";
 
+const ORDER = ["ground", "stock", "weather"];
+const FACE: Record<string,string> = {
+  ground: "/world/npc/crew-door.jpg",   // the rabbit digs
+  stock:  "/world/npc/crew-roof.jpg",   // the fox in the hard hat goes to the store
+  weather:"/world/npc/crew-garden.jpg", // the badger reads the seasons
+};
+
 const SUGGESTIONS = [
   "somewhere to read in the afternoon",
   "a den for a rainy week",
@@ -14,7 +21,7 @@ const SUGGESTIONS = [
 ];
 
 type Crew = { name: string; state: NodeState; ms?: number; text?: string };
-type Built = { part: string; struck?: boolean };
+type Row = { branch: string; found: string; decided: string; stale?: boolean };
 
 export default function Buildyard() {
   const [request, setRequest] = useState("");
@@ -22,7 +29,10 @@ export default function Buildyard() {
   const [crew, setCrew] = useState<Crew[]>([]);
   const [join, setJoin] = useState<{ have: number; of: number; done: boolean } | null>(null);
   const [plot, setPlot] = useState<string>("");
-  const [built, setBuilt] = useState<Built[]>([]);
+  const [plan, setPlan] = useState<Row[]>([]);
+  const [sites, setSites] = useState<Record<string, string>>({});
+  const [site, setSite] = useState<string>("");
+  const lastReq = useRef<string>("");
   const [history, setHistory] = useState<{ src: string; label: string }[]>([]);
   const [events, setEvents] = useState<TraceEvent[]>([]);
   const [line, setLine] = useState("Tell me what you want built.");
@@ -56,6 +66,10 @@ export default function Buildyard() {
     }
   }, []);
   useEffect(() => { loadGraph(); }, [loadGraph]);
+  useEffect(() => {
+    fetch("/api/w2/sites").then((r) => r.json())
+      .then((d) => setSites(d.sites ?? {})).catch(() => {});
+  }, []);
 
   const push = (hook: string, label: string) =>
     setEvents((e) => [...e, {
@@ -66,17 +80,20 @@ export default function Buildyard() {
   const setNode = (name: string, state: NodeState, extra: Partial<Crew> = {}) =>
     setCrew((c) => c.map((n) => (n.name === name ? { ...n, state, ...extra } : n)));
 
-  async function build(text?: string) {
+  async function build(text?: string, forceSite?: string) {
     const msg = (text ?? request).trim();
     if (busy || !msg) return;
+    lastReq.current = msg;
     setBusy(true); setRejected(false); setActiveRoute(null); setLine("Right. Crew!");
+    setPlan([]);
     setEvents([]); setJoin(null); setWall(undefined); setWork(undefined);
     setCrew((c) => c.map((n) => ({ ...n, state: "idle", ms: undefined })));
 
     fanWork.current = 0; fanStart.current = 0; fanRan.current = 0;
     const res = await fetch("/api/w2/build", {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ request: msg, session_id: sid.current || undefined }),
+      body: JSON.stringify({ request: msg, session_id: sid.current || undefined,
+        site: forceSite || undefined }),
     });
     const reader = res.body?.getReader();
     if (!reader) { setBusy(false); setLine("The yard agent isn't answering."); return; }
@@ -120,6 +137,14 @@ export default function Buildyard() {
               setWall((Date.now() - fanStart.current) / 1000);
             }
           }
+          if (d.finding?.branch) {
+            // A row at a time, as each branch lands — so three pieces of research
+            // are watched arriving rather than asserted afterwards.
+            setPlan((rows) => [...rows.filter((r) => r.branch !== d.finding.branch),
+              { branch: d.finding.branch, found: d.finding.found, decided: d.finding.decided }]
+              .sort((x, y) => ORDER.indexOf(x.branch) - ORDER.indexOf(y.branch)));
+            push("found", `${d.finding.branch} · ${d.finding.found}`);
+          }
           push("node", `${d.node} · done ${(d.ms / 1000).toFixed(1)}s`);
         } else if (d.kind === "join.wait") {
           setJoin({ have: d.have, of: d.of, done: false });
@@ -130,18 +155,17 @@ export default function Buildyard() {
           push("join", `branches joined: ${d.branches.length}`);
         } else if (d.kind === "render") {
           setPlot(d.image);
-          const parts = (d.text || "").replace(/^built:\s*/, "").split(";")
-            .map((s: string) => s.trim()).filter(Boolean);
-          setBuilt(parts.map((p: string) => ({ part: p })));
+          if (Array.isArray(d.plan) && d.plan.length) setPlan(d.plan);
           setHistory((h) => [...h, { src: d.image, label: `turn ${h.length + 1}` }]);
           push("render", "one image from three descriptions");
         } else if (d.kind === "route") {
           if (d.route === "rework") {
             setRejected(true); setLine(d.why || "hang it again");
             setNode(d.to, "redo");
-            // The plot has to go backwards. A rejection that only produces another
-            // picture has not taught a loop.
-            setBuilt((b) => b.map((x, i) => (i === 1 ? { ...x, struck: true } : x)));
+            // The plot goes backwards, and the plan says WHICH row moved — without
+            // that the picture changing and the plan changing are two things that
+            // happened near each other rather than one event.
+            setPlan((rows) => rows.map((r) => ({ ...r, stale: r.branch !== d.to })));
             setHistory((h) => [...h, { src: plot, label: `− ${d.to}` }]);
             setJoin({ have: 0, of: 1, done: false });
           } else {
@@ -211,7 +235,7 @@ export default function Buildyard() {
             marginBottom: 10 }}>
             <span className="serif" style={{ fontSize: 16 }}>🏡 The plot</span>
             <span className={`pill ${rejected ? "warn" : "gold"}`}>
-              {rejected ? "sent back" : built.length ? `${built.length} built` : "empty"}
+              {rejected ? "sent back" : plan.length ? `${plan.length} decisions` : "empty"}
             </span>
           </div>
           <div style={{ borderRadius: 14, overflow: "hidden", minHeight: 200,
@@ -225,21 +249,45 @@ export default function Buildyard() {
 
           <div className="mono" style={{ fontSize: 10.5, letterSpacing: ".14em",
             color: "var(--faint)", margin: "12px 0 6px", textTransform: "uppercase" }}>
-            Built · {built.filter((b) => !b.struck).length}
+            The plan
           </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, minHeight: 26 }}>
-            {built.length === 0
-              ? <span style={{ fontSize: 12.5, color: "var(--faint)" }}>ask for something ↑</span>
-              : built.map((b, i) => (
-                <span key={i} style={{ fontSize: 12, fontWeight: 600, padding: "3px 10px",
-                  borderRadius: 999, textDecoration: b.struck ? "line-through" : "none",
-                  background: b.struck ? "rgba(229,138,168,.14)" : "rgba(111,199,173,.16)",
-                  color: b.struck ? "#b03e64" : "#2f7d67",
-                  border: `1px solid ${b.struck ? "rgba(229,138,168,.45)" : "rgba(111,199,173,.4)"}` }}>
-                  {b.part}
-                </span>
+          {plan.length === 0
+            ? <span style={{ fontSize: 12.5, color: "var(--faint)" }}>ask for something ↑</span>
+            : <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+                {plan.map((r) => (
+                  <div key={r.branch} style={{ display: "grid", alignItems: "center", gap: 8,
+                    gridTemplateColumns: "22px 1fr 12px 1.1fr", fontSize: 12,
+                    opacity: r.stale ? .42 : 1, transition: "opacity .3s" }}>
+                    <img src={FACE[r.branch]} alt="" width={22} height={22}
+                      style={{ borderRadius: 7, objectFit: "cover", display: "block",
+                        filter: r.stale ? "saturate(.4)" : "none" }} />
+                    <span className="mono" style={{ color: "var(--sub)", overflow: "hidden",
+                      textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                      title={`${r.branch}: ${r.found}`}>{r.found}</span>
+                    <span style={{ color: "var(--faint)" }}>→</span>
+                    <span style={{ fontWeight: 600,
+                      color: r.stale ? "var(--faint)" : "#2f7d67", overflow: "hidden",
+                      textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                      title={r.decided}>{r.decided}</span>
+                  </div>
+                ))}
+              </div>}
+
+          {/* The experiment, one click. Same request, same crew, one variable moved —
+              without it nobody can tell the cottage tracks the findings. */}
+          {plan.length > 0 && !busy && Object.keys(sites).length > 1 && (
+            <div style={{ display: "flex", gap: 7, marginTop: 12, flexWrap: "wrap",
+              alignItems: "center" }}>
+              <span className="mono" style={{ fontSize: 10.5, color: "var(--faint)",
+                letterSpacing: ".1em" }}>BUILD IT ON</span>
+              {Object.entries(sites).filter(([id]) => id !== site).slice(0, 3).map(([id, name]) => (
+                <button key={id} className="rune" style={{ fontSize: 11 }}
+                  onClick={() => { setSite(id); build(lastReq.current, id); }}>
+                  ⟲ {name.replace(/^the /, "")}
+                </button>
               ))}
-          </div>
+            </div>
+          )}
 
           <div className="mono" style={{ fontSize: 10.5, letterSpacing: ".14em",
             color: "var(--faint)", margin: "12px 0 6px", textTransform: "uppercase" }}>

@@ -56,8 +56,23 @@ MAX_REWORKS = 1
 # `survey` has a real job now: it picks the SITE, and everything downstream reads
 # it. output_key drops its answer into state, which is how three branches that
 # each receive blueprint's brief can still know which ground they are standing on.
+def _honour_forced_site(callback_context):
+    """Week one's identity lock, wearing a hard hat.
+
+    `survey` reads the request and picks a site; if the reader pressed "build it
+    somewhere else", this overrules that pick after the fact. The model's choice is
+    a request. The callback is the rule — and the whole point of the button is to
+    hold everything else still, which only a rule can promise.
+    """
+    forced = (callback_context.state.get("force_site") or "").strip().lower()
+    if forced and forced in lookups.SITES:
+        callback_context.state["site"] = forced
+    return None
+
+
 survey = Agent(
     name="survey",
+    after_agent_callback=_honour_forced_site,
     model=MODEL,
     generate_content_config=FAST,
     output_key="site",
@@ -157,6 +172,17 @@ weather = Agent(
 )
 
 
+def finding_from(branch: str, output: Any) -> dict | None:
+    """One finding out of whatever a branch returned — a dict from the function node,
+    two labelled lines from the agents. The service uses this to fill the plan a row
+    at a time, as each branch lands."""
+    if isinstance(output, dict) and output.get("branch"):
+        return output
+    if isinstance(output, str) and output.strip():
+        return _split(branch, output)
+    return None
+
+
 def _split(branch: str, text: str) -> dict:
     """Pull FOUND/DECIDED out of an agent's two lines, tolerantly."""
     found = decided = ""
@@ -195,7 +221,7 @@ def _plan(node_input: Any) -> list[dict]:
     return out
 
 
-async def render(node_input: Any):
+async def render(ctx: Context, node_input: Any):
     """One image, built from the DECISIONS and nothing else.
 
     Which is what makes the picture legible: every visible thing about the cottage
@@ -204,7 +230,7 @@ async def render(node_input: Any):
     """
     plan = _plan(node_input)
     decisions = "; ".join(p["decided"] for p in plan if p.get("decided"))
-    png = await asyncio.to_thread(render_site, decisions)
+    png = await asyncio.to_thread(render_site, decisions, lookups.SITES.get((ctx.state.get("site") or "").strip().lower(), {}).get("name", "a grassy plot"))
     yield Event(
         message=[
             types.Part.from_text(text="plan: " + decisions),

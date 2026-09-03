@@ -90,6 +90,12 @@ async def health() -> dict:
     return {"ok": True, "graph": topology(wf), "graph_error": err}
 
 
+@app.get("/sites")
+async def sites() -> dict:
+    from yard import lookups
+    return {"sites": lookups.site_names()}
+
+
 @app.get("/graph")
 async def graph() -> dict:
     wf, err = load_graph()
@@ -101,7 +107,7 @@ def _sse(kind: str, **data) -> str:
     return f"data: {json.dumps({'kind': kind, **data})}\n\n"
 
 
-async def _run(request_text: str, sid: str):
+async def _run(request_text: str, sid: str, site: str | None = None):
     """Drive the workflow and translate ADK events into the six the UI understands."""
     wf, err = load_graph()
     topo = topology(wf)
@@ -132,7 +138,13 @@ async def _run(request_text: str, sid: str):
 
     sess = await _sessions.get_session(app_name=APP, user_id="traveler", session_id=sid)
     if sess is None:
-        await _sessions.create_session(app_name=APP, user_id="traveler", session_id=sid)
+        # A forced site is how the reader runs the experiment: same request, same
+        # crew, one variable moved. Without it nobody can tell that the cottage
+        # tracks the findings rather than merely being a cottage. It goes in as
+        # `force_site` because `survey` writes `site` itself — a callback on survey
+        # overrules its pick, which is week one's lesson with a hard hat on.
+        await _sessions.create_session(app_name=APP, user_id="traveler", session_id=sid,
+                                       state={"force_site": site} if site else None)
 
     runner = Runner(app_name=APP, agent=wf, session_service=_sessions,
                     artifact_service=_artifacts)
@@ -161,12 +173,18 @@ async def _run(request_text: str, sid: str):
             else:
                 if node in topo["fanout"]:
                     landed.add(node)
-                yield _sse("node.done", node=node, ms=ms, text=text[:200])
+                finding = None
+                if node in topo["fanout"]:
+                    from yard.agent import finding_from
+                    finding = finding_from(node, ev.model_dump().get("output") or text)
+                yield _sse("node.done", node=node, ms=ms, text=text[:200], finding=finding)
                 if node in topo["fanout"]:
                     yield _sse("join.wait", have=len(landed), of=expected)
 
             if image:
-                yield _sse("render", image=image, text=text[:200])
+                out = ev.model_dump().get("output") or {}
+                yield _sse("render", image=image, text=text[:200],
+                           plan=(out.get("plan") if isinstance(out, dict) else None))
 
             if route:
                 dest = [e["to"] for e in topo["edges"]
@@ -199,7 +217,7 @@ async def build(req: Request):
     # returned no session id at all, and every later call died on an empty string.
     sid = body.get("session_id") or f"y-{uuid.uuid4().hex[:10]}"
     return StreamingResponse(
-        _run(request_text, sid),
+        _run(request_text, sid, body.get("site")),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
                  "X-Session-Id": sid},

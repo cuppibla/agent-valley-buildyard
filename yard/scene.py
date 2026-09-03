@@ -32,6 +32,9 @@ CREW = (
     "three little animal builders still at work on it — a fox in a hard hat on the roof, "
     "a white rabbit in dungarees at the front door, a badger in a green apron in the garden"
 )
+# Naming them every time is not decoration: pinning holds the building but not the
+# cast, and a well added on a later turn once took the badger's corner and the
+# badger simply stopped existing.
 
 MODEL = "gemini-2.5-flash-image"
 
@@ -50,11 +53,15 @@ def _client():
     return _CLIENT
 
 
-def render_site(built: str, reference_png: bytes | None = None) -> bytes:
-    """One picture of the plot as it stands.
+def render_site(decisions: str, site: str = "a grassy plot",
+                reference_png: bytes | None = None) -> bytes:
+    """One picture, built from the DECISIONS and nothing else.
 
-    `built` is everything built so far, in one string — the sentence accumulates even
-    though the reference does not, exactly like week one's outfit.
+    This is what makes the cottage legible instead of merely pretty: every visible
+    thing about it traces to a line in the plan, so "why is that roof so steep" has
+    an answer three inches above it. Verified before anything else was rewritten —
+    two sites with opposite decisions produce a cottage on stilts under a shallow
+    wide-eaved roof, and a cottage on a stone footing under a 45° one.
     """
     from google.genai import types
 
@@ -63,10 +70,9 @@ def render_site(built: str, reference_png: bytes | None = None) -> bytes:
         parts.append(types.Part(inline_data=types.Blob(
             mime_type=sniff_mime(reference_png), data=reference_png)))
         parts.append(
-            f"The EXACT same building site as the reference image — identical cottage, "
-            f"identical three animal builders in identical poses, identical colours, "
-            f"materials and low-poly style — now with {built}. Keep everything else "
-            f"unchanged. {STYLE}"
+            f"The EXACT same building site as the reference image — identical three "
+            f"animal builders in identical poses, identical colours and low-poly style "
+            f"— rebuilt to this design: {decisions}. {STYLE}"
         )
     else:
         for ref in _style_refs():
@@ -76,9 +82,9 @@ def render_site(built: str, reference_png: bytes | None = None) -> bytes:
         parts.append(
             f"Study the art style of the reference images above — that same adorable cute "
             f"low-poly look, the same big soft eyes, the same pastel palette. Now draw a "
-            f"BUILDING SITE in that identical style: a small half-built cottage on a grassy "
-            f"plot with {built}, wooden scaffolding and tiny tools on the ground, and {CREW}. "
-            f"They are all busy at once. A place, not a portrait. {STYLE}"
+            f"small cottage on {site}, in that identical style. "
+            f"Follow this design EXACTLY: {decisions}. Include {CREW}. "
+            f"A place, not a portrait. Wide three-quarter view. {STYLE}"
         )
 
     resp = _client().models.generate_content(

@@ -21,9 +21,13 @@ type Join = { have: number; of: number; done: boolean } | null;
 const AVATAR: Record<string, string> = {
   survey: "/world/npc/odo.jpg",
   blueprint: "/world/npc/odo.jpg",
-  roof: "/world/npc/crew-roof.jpg",
-  door: "/world/npc/crew-door.jpg",
-  garden: "/world/npc/crew-garden.jpg",
+  // The same three faces the plan signs its rows with — the reader meets a crew
+  // member on the graph and then reads what they decided, and it has to be the same
+  // animal. These keys were `roof`/`door`/`garden` until the branches were reshaped
+  // into ground/stock/weather, after which all three quietly fell back to Odo.
+  ground: "/world/npc/crew-door.jpg",    // the rabbit digs
+  stock: "/world/npc/crew-roof.jpg",     // the fox in the hard hat goes to the store
+  weather: "/world/npc/crew-garden.jpg", // the badger reads the seasons
   // Week one's forgekeeper draws the picture here too, and Vesper signs it off.
   render: "/world/npc/maren.jpg",
   inspect: "/world/npc/twill.jpg",

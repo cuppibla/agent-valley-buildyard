@@ -1,10 +1,10 @@
 """The Buildyard — one graph, four shapes.
 
-    START ─▶ survey ─▶ blueprint ─┬─▶ roof   ─┐
-                                  ├─▶ door   ─┼─▶ join ─▶ render ─▶ inspect ─┬─▶ finish
-                                  └─▶ garden ─┘                    ▲         │
-                                                                   └─────────┘
-                                                                    "rework"
+    START ─▶ survey ─▶ blueprint ─┬─▶ ground  ─┐
+                                  ├─▶ stock   ─┼─▶ join ─▶ render ─▶ inspect ─┬─▶ finish
+                                  └─▶ weather ─┘                    ▲         │
+                                                                    └─────────┘
+                                                                     "rework"
 
 Everything in this file except the last statement is an ordinary agent or an
 ordinary function. The last statement is the chapter: three ways of saying what
@@ -14,7 +14,10 @@ runs next, in one list.
     (a, b, c)          a tuple      — all three run together
     {"x": a, "y": b}   a dict       — whichever route the node emitted
 
-The three edits the codelab has you make are all in that list, and all one line.
+The three branches are deliberately three DIFFERENT KINDS of thing — a plain
+function, an agent with a tool, an agent with none — because a node is a slot, not
+an agent. It is also why they cannot be collapsed: one model call is not
+simultaneously a soil calculation, an inventory query and a judgement about snow.
 """
 
 from __future__ import annotations
@@ -29,119 +32,220 @@ from google.adk.workflow import JoinNode
 from google.genai import types
 
 from forge.agent.backends import shrink
+from yard import lookups
 from yard.scene import render_site
 
 MODEL = "gemini-3-flash-preview"
 
-# How many times the inspector is allowed to send work back. A loop in a graph is
+# Gemini 3 thinks before it answers. Left on everywhere, `weather` spent 80 seconds
+# of a 105-second build deliberating about a roof pitch — so it is off for the two
+# nodes whose jobs are clerical (pick a site id, restate a brief) and left ON for the
+# two branches that genuinely weigh something. That is also what makes the fan-out
+# watchable: with thinking off everywhere the whole thing was over in 2.4 seconds,
+# which is the right answer to the wrong question.
+FAST = types.GenerateContentConfig(
+    thinking_config=types.ThinkingConfig(thinking_budget=0))
+
+# How many times the reviewer is allowed to send work back. A loop in a graph is
 # still a loop: something has to end it, and putting the bound here — rather than
 # hoping the model stops — is the whole point of chapter 4.
 MAX_REWORKS = 1
 
 
-# ── the two agents that plan ────────────────────────────────────────────────
+# ── where, and what ─────────────────────────────────────────────────────────
+# `survey` has a real job now: it picks the SITE, and everything downstream reads
+# it. output_key drops its answer into state, which is how three branches that
+# each receive blueprint's brief can still know which ground they are standing on.
 survey = Agent(
     name="survey",
     model=MODEL,
+    generate_content_config=FAST,
+    output_key="site",
     instruction=(
-        "You survey a plot of ground for a small animal's home.\n\n"
-        "Whatever the traveler asks for, reply with ONE short sentence describing the "
-        "plot it should be built on — ground, light, what is around it. Never mention "
-        "the building itself; that is not your job.\n\n"
-        "The sentence and nothing else. No greeting, no explanation."
+        "You choose where to build. These are the only sites in the valley:\n\n"
+        + "\n".join(f"  {k}  — {v}" for k, v in lookups.site_names().items())
+        + "\n\nRead what the traveler asked for and reply with EXACTLY ONE site id "
+        "from the left column — nothing else, no punctuation, no explanation."
     ),
 )
 
 blueprint = Agent(
     name="blueprint",
     model=MODEL,
+    generate_content_config=FAST,
     instruction=(
-        "You are handed a description of a plot. Write the build plan for a small "
-        "cottage on it, in ONE short sentence — materials, shape, mood.\n\n"
-        "The sentence and nothing else."
+        "You are handed a request for a small animal's home. Write the brief in ONE "
+        "short sentence — who it is for and what it is for. Not materials, not "
+        "structure; the crew decides those.\n\nThe sentence and nothing else."
     ),
 )
 
 
-# ── the three that build, at the same time ──────────────────────────────────
-# All three receive the SAME input — whatever `blueprint` returned. Each reads the
-# same plan and answers for its own part, which is why they do not need to talk to
-# each other and can run together.
-def _crew(name: str, part: str, doing: str) -> Agent:
-    return Agent(
-        name=name,
-        model=MODEL,
-        instruction=(
-            f"You are the {name} of a small building crew. You are handed the build "
-            f"plan for a cottage.\n\n"
-            f"Reply with ONE short phrase describing {part}, and nothing else — no "
-            f"sentence, no punctuation at the end. Six words at most.\n\n"
-            f'Example shape: "{doing}".'
-        ),
-    )
+# ── the three that find things out, at the same time ────────────────────────
+# Three different kinds of node. Each returns the same shape — what it FOUND and
+# what it therefore DECIDED — so the join has something to compose rather than
+# three fragments of a sentence to concatenate.
+
+def _finding(branch: str, found: str, decided: str) -> dict:
+    return {"branch": branch, "found": found, "decided": decided}
 
 
-roof = _crew("roof", "the roof you are laying", "steep slate tiles, moss along the ridge")
-door = _crew("door", "the front door you are hanging", "a round blue door with a brass handle")
-garden = _crew("garden", "the garden you are planting", "a low bed of pink and yellow flowers")
+async def ground(ctx: Context, node_input: Any):
+    """A plain function. No model at all — soil numbers are arithmetic.
+
+    It returns in milliseconds while the other two take seconds, which is the first
+    honest thing anyone learns about a fan-out: branches are not the same length.
+    """
+    r = lookups.ground_record(ctx.state.get("site", ""))
+    found = f"{r['soil']}, {r['drainage']} drainage · {r['bearing_t_m2']} t/m²"
+    if r["bearing_t_m2"] < 2.0 or r["water_table_m"] < 1.0:
+        decided = "a raised timber floor on short stilts, clear of the wet ground"
+    else:
+        decided = "a solid stone footing, sitting straight on the ground"
+    yield Event(message=f"ground · {found}", output=_finding("ground", found, decided))
+
+
+def read_store(tool_context) -> dict:
+    """What is actually in the yard's store, here, today.
+
+    Returns:
+        The timber on hand, how much of it, and whether there is stone.
+    """
+    # The site comes from the shared dictionary, not from the model. Asked to pass
+    # it as an argument the agent read the brief instead and looked up "hedgehog",
+    # which quietly returned the default site's timber — a wrong answer that looks
+    # like a right one. This is week one's lesson: what you cannot afford the model
+    # to get wrong does not go in a prompt.
+    return lookups.store_record(tool_context.state.get("site", ""))
+
+
+stock = Agent(
+    name="stock",
+    model=MODEL,
+    tools=[read_store],
+    instruction=(
+        "You keep the yard's material store. Call `read_store` — it knows which site "
+        "you are on — then choose the frame from what is ACTUALLY there. You cannot "
+        "order in.\n\nReply with exactly two lines and nothing else:\n"
+        "FOUND: <the timber and how much, six words at most>\n"
+        "DECIDED: <the frame you will build, six words at most>"
+    ),
+)
+
+
+# No tool, on purpose. It is handed the record and weighs it — which is a third
+# kind of node again: not arithmetic, not a lookup, a judgement. Before it had the
+# table it invented "cold wind and heavy snow" and took 55 seconds doing it.
+_CLIMATE = "\n".join(
+    f"  {k}  snow {v['climate']['snow_m']} m · rain {v['climate']['rain_mm']} mm · "
+    f"{v['climate']['wind']} wind · {v['climate']['sun']}"
+    for k, v in lookups.SITES.items())
+
+weather = Agent(
+    name="weather",
+    model=MODEL,
+    instruction=(
+        "You decide the roof and which way the door faces.\n\n"
+        "The climate record for every site in the valley:\n" + _CLIMATE +
+        "\n\nThe site you are on is: {site}\n\n"
+        "Read that site's line. Heavy snow needs a steep pitch; heavy rain needs deep "
+        "eaves; a cold wind decides which way the door faces.\n\n"
+        "Reply with exactly two lines and nothing else:\n"
+        "FOUND: <the conditions, six words at most>\n"
+        "DECIDED: <pitch and which way the door faces, eight words at most>"
+    ),
+)
+
+
+def _split(branch: str, text: str) -> dict:
+    """Pull FOUND/DECIDED out of an agent's two lines, tolerantly."""
+    found = decided = ""
+    for line in (text or "").splitlines():
+        low = line.strip().lower()
+        if low.startswith("found:"):
+            found = line.split(":", 1)[1].strip()
+        elif low.startswith("decided:"):
+            decided = line.split(":", 1)[1].strip()
+    return _finding(branch, found or (text or "").strip()[:60], decided or "as found")
+
 
 join = JoinNode(name="join")
 
 
 # ── the one node that draws ─────────────────────────────────────────────────
-def _parts(node_input: Any) -> list[str]:
+ORDER = ("ground", "stock", "weather")
+
+
+def _plan(node_input: Any) -> list[dict]:
     """The join hands down a dict keyed by branch. Read it in a fixed order so the
-    prompt is stable even though the branches finish in whatever order they like."""
+    plan is stable even though the branches finish in whatever order they like.
+
+    Two shapes arrive here, on purpose: `ground` is a function and returns the
+    finding already structured, while `stock` and `weather` are agents and return
+    text. Three kinds of node, three kinds of output, one plan.
+    """
+    out: list[dict] = []
     if isinstance(node_input, dict):
-        return [str(node_input.get(k) or "").strip() for k in ("roof", "door", "garden")]
-    return [str(node_input).strip()]
+        for key in ORDER:
+            v = node_input.get(key)
+            if isinstance(v, dict) and v.get("branch"):
+                out.append(v)
+            elif isinstance(v, str) and v.strip():
+                out.append(_split(key, v))
+    return out
 
 
 async def render(node_input: Any):
-    """One image, from three descriptions.
+    """One image, built from the DECISIONS and nothing else.
 
-    Deliberately the ONLY node that draws. Three parallel renders would return three
-    different cottages and nothing could merge them — so the branches return words,
-    and the join is where the words become one picture.
+    Which is what makes the picture legible: every visible thing about the cottage
+    traces to a line in the plan, so "why is the roof so steep" has an answer three
+    inches above it.
     """
-    roof_txt, door_txt, garden_txt = _parts(node_input)
-    built = f"{roof_txt}; {door_txt}; {garden_txt}"
-
-    # yard.scene, not the shared backend: that one's no-reference prompt insists on
-    # a familiar, so a cottage came back as a cat's face. A place needs its own prompt.
-    png = await asyncio.to_thread(render_site, built)
+    plan = _plan(node_input)
+    decisions = "; ".join(p["decided"] for p in plan if p.get("decided"))
+    png = await asyncio.to_thread(render_site, decisions)
     yield Event(
         message=[
-            types.Part.from_text(text=f"built: {built}"),
+            types.Part.from_text(text="plan: " + decisions),
             types.Part.from_bytes(data=shrink(png), mime_type="image/jpeg"),
         ],
-        output={"built": [roof_txt, door_txt, garden_txt]},
+        output={"plan": plan},
     )
 
 
 # ── the one node that decides ───────────────────────────────────────────────
 async def inspect(ctx: Context, node_input: Any):
-    """Walk the finished site and either sign it off or send one thing back.
+    """Review the design and either sign it off or send ONE branch back.
 
-    The route is the interesting part: this node does not call anything. It emits a
-    word, and the edges below decide what that word means.
+    The fault it looks for is a conflict BETWEEN branches — which exists precisely
+    because they ran in parallel and could not see each other. That is the cost of
+    fanning out, and this node is where it gets paid.
 
-    The count lives in session state, not in a variable up here — two travellers
+    The count lives in session state, not in a variable up here: two travellers
     building at once share this process, and a counter on the function would have
-    them sending each other's doors back.
+    them sending each other's work back.
     """
-    built = (node_input or {}).get("built", []) if isinstance(node_input, dict) else []
+    plan = (node_input or {}).get("plan", []) if isinstance(node_input, dict) else []
+    by = {p["branch"]: p for p in plan}
     reworks = int(ctx.state.get("reworks", 0))
 
-    if reworks < MAX_REWORKS:
+    snow = "steep" in (by.get("weather", {}).get("decided", "") or "").lower() \
+        or "45" in (by.get("weather", {}).get("decided", "") or "")
+    soft = any(w in (by.get("stock", {}).get("decided", "") or "").lower()
+               for w in ("cedar", "pine", "birch"))
+
+    if reworks < MAX_REWORKS and snow and soft:
         ctx.state["reworks"] = reworks + 1
+        ctx.state["fault"] = "stock"
         yield Event(
-            message="the door faces the wind — hang it again",
+            message=("that frame will not carry this roof under snow — "
+                     "the weather crew pitched it steep, pick again"),
             actions=EventActions(route="rework"),
         )
     else:
         yield Event(
-            message=f"that will stand · {len(built)} parts signed off",
+            message=f"that will stand · {len(plan)} decisions signed off",
             actions=EventActions(route="pass"),
         )
 
@@ -151,21 +255,19 @@ async def finish(node_input: Any):
 
 
 # ── the wire ────────────────────────────────────────────────────────────────
-# Read it as one sentence. A comma is "then". A tuple is "at the same time". A dict
-# is "whichever way the inspector pointed".
 root_agent = Workflow(
     name="yard",
-    description="Survey a plot, draw it, build it with three crews at once, inspect it.",
+    description="Pick a site, brief it, find out three things at once, design, review.",
     edges=[
         ("START", survey,
 
          # 👉 EDIT ONE — chapter 2. Add `blueprint,` on the next line, then save.
 
-         # 👉 EDIT TWO — chapter 3. Add `(roof, door, garden), join, render, inspect,`
+         # 👉 EDIT TWO — chapter 3. Add `(ground, stock, weather), join, render, inspect,`
          #    on the next line. The brackets are the whole syntax of "at the same time".
 
-         # 👉 EDIT THREE — chapter 4. Add `{"rework": door, "pass": finish},` on the
-         #    next line. A dict is "whichever way the inspector pointed".
+         # 👉 EDIT THREE — chapter 4. Add `{"rework": stock, "pass": finish},` on the
+         #    next line. A dict is "whichever way the reviewer pointed".
 
          ),
     ],

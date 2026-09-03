@@ -229,6 +229,53 @@ export default function Buildyard() {
         times={Object.fromEntries(crew.filter((c) => c.ms).map((c) => [c.name, c.ms!]))}
         join={join} activeRoute={activeRoute} wall={wall} work={work} />
 
+      {/* The plan is the deliverable and the picture illustrates it, so the plan
+          gets a full row. Squeezed into half a column under the image the layout
+          said the opposite, and every line ended in an ellipsis. */}
+      {(plan.length > 0 || busy) && (
+        <div className="glass" style={{ padding: "14px 18px", marginBottom: 14 }}>
+          <div className="mono" style={{ fontSize: 10.5, letterSpacing: ".14em",
+            color: "var(--faint)", textTransform: "uppercase", marginBottom: 9 }}>
+            The plan
+          </div>
+          {plan.length === 0
+            ? <span className="mono" style={{ fontSize: 12, color: "var(--faint)" }}>
+                three crews are finding out&hellip;</span>
+            : <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                {plan.map((r) => (
+                  <div key={r.branch} style={{ display: "grid", alignItems: "center", gap: 12,
+                    gridTemplateColumns: "26px 84px minmax(0,1fr) 14px minmax(0,1.15fr)",
+                    fontSize: 13, opacity: r.stale ? .4 : 1, transition: "opacity .3s" }}>
+                    <img src={FACE[r.branch]} alt="" width={26} height={26}
+                      style={{ borderRadius: 8, objectFit: "cover", display: "block",
+                        filter: r.stale ? "saturate(.4)" : "none" }} />
+                    <span className="mono" style={{ fontSize: 11, letterSpacing: ".06em",
+                      color: "var(--violet-soft)", textTransform: "uppercase" }}>{r.branch}</span>
+                    <span className="mono" style={{ fontSize: 12, color: "var(--sub)" }}>{r.found}</span>
+                    <span style={{ color: "var(--faint)" }}>&rarr;</span>
+                    <span style={{ fontWeight: 600,
+                      color: r.stale ? "var(--faint)" : "#2f7d67" }}>{r.decided}</span>
+                  </div>
+                ))}
+              </div>}
+
+          {/* The experiment, one click. Same request, same crew, one variable moved. */}
+          {plan.length > 0 && !busy && Object.keys(sites).length > 1 && (
+            <div style={{ display: "flex", gap: 7, marginTop: 13, paddingTop: 11,
+              borderTop: "1px solid var(--line)", flexWrap: "wrap", alignItems: "center" }}>
+              <span className="mono" style={{ fontSize: 10.5, color: "var(--faint)",
+                letterSpacing: ".1em" }}>SAME REQUEST, SOMEWHERE ELSE</span>
+              {Object.entries(sites).filter(([id]) => id !== site).slice(0, 3).map(([id, name]) => (
+                <button key={id} className="rune" style={{ fontSize: 11 }}
+                  onClick={() => { setSite(id); build(lastReq.current, id); }}>
+                  &#8635; {name.replace(/^the /, "")}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, alignItems: "stretch" }}>
         <div className="glass" style={{ padding: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center",
@@ -246,48 +293,6 @@ export default function Buildyard() {
               : <span className="mono" style={{ fontSize: 12.5, color: "var(--faint)", padding: 40 }}>
                   nothing here yet</span>}
           </div>
-
-          <div className="mono" style={{ fontSize: 10.5, letterSpacing: ".14em",
-            color: "var(--faint)", margin: "12px 0 6px", textTransform: "uppercase" }}>
-            The plan
-          </div>
-          {plan.length === 0
-            ? <span style={{ fontSize: 12.5, color: "var(--faint)" }}>ask for something ↑</span>
-            : <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                {plan.map((r) => (
-                  <div key={r.branch} style={{ display: "grid", alignItems: "center", gap: 8,
-                    gridTemplateColumns: "22px 1fr 12px 1.1fr", fontSize: 12,
-                    opacity: r.stale ? .42 : 1, transition: "opacity .3s" }}>
-                    <img src={FACE[r.branch]} alt="" width={22} height={22}
-                      style={{ borderRadius: 7, objectFit: "cover", display: "block",
-                        filter: r.stale ? "saturate(.4)" : "none" }} />
-                    <span className="mono" style={{ color: "var(--sub)", overflow: "hidden",
-                      textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                      title={`${r.branch}: ${r.found}`}>{r.found}</span>
-                    <span style={{ color: "var(--faint)" }}>→</span>
-                    <span style={{ fontWeight: 600,
-                      color: r.stale ? "var(--faint)" : "#2f7d67", overflow: "hidden",
-                      textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                      title={r.decided}>{r.decided}</span>
-                  </div>
-                ))}
-              </div>}
-
-          {/* The experiment, one click. Same request, same crew, one variable moved —
-              without it nobody can tell the cottage tracks the findings. */}
-          {plan.length > 0 && !busy && Object.keys(sites).length > 1 && (
-            <div style={{ display: "flex", gap: 7, marginTop: 12, flexWrap: "wrap",
-              alignItems: "center" }}>
-              <span className="mono" style={{ fontSize: 10.5, color: "var(--faint)",
-                letterSpacing: ".1em" }}>BUILD IT ON</span>
-              {Object.entries(sites).filter(([id]) => id !== site).slice(0, 3).map(([id, name]) => (
-                <button key={id} className="rune" style={{ fontSize: 11 }}
-                  onClick={() => { setSite(id); build(lastReq.current, id); }}>
-                  ⟲ {name.replace(/^the /, "")}
-                </button>
-              ))}
-            </div>
-          )}
 
           <div className="mono" style={{ fontSize: 10.5, letterSpacing: ".14em",
             color: "var(--faint)", margin: "12px 0 6px", textTransform: "uppercase" }}>

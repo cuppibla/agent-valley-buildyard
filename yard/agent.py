@@ -143,7 +143,8 @@ stock = Agent(
         "you are on — then choose the frame from what is ACTUALLY there. You cannot "
         "order in.\n\nReply with exactly two lines and nothing else:\n"
         "FOUND: <the timber and how much, six words at most>\n"
-        "DECIDED: <the frame you will build, six words at most>"
+        "DECIDED: <the FRAME — posts, beams, trusses — six words at most. Name the "
+        "structure, not the building: 'pine king post frame', never 'squirrel house'>"
     ),
 )
 

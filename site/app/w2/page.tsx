@@ -51,6 +51,7 @@ export default function Buildyard() {
   const fanWork = useRef(0);
   const fanStart = useRef(0);
   const fanRan = useRef(0);       // branches in THIS round of the fan-out
+  const fanDone = useRef(0);      // …and how many of them are home
 
   // The crew row is built from the learner's own edges, so it is right before a
   // single build has been run — and wrong the moment they add an edge and reload.
@@ -89,7 +90,7 @@ export default function Buildyard() {
     setEvents([]); setJoin(null); setWall(undefined); setWork(undefined);
     setCrew((c) => c.map((n) => ({ ...n, state: "idle", ms: undefined })));
 
-    fanWork.current = 0; fanStart.current = 0; fanRan.current = 0;
+    fanWork.current = 0; fanStart.current = 0; fanRan.current = 0; fanDone.current = 0;
     const res = await fetch("/api/w2/build", {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ request: msg, session_id: sid.current || undefined,
@@ -123,7 +124,7 @@ export default function Buildyard() {
             // A rework re-runs one branch. Rolling it into the round that had three
             // would turn "9.6s of wall clock against 23.7s of work" into a pair of
             // numbers that are true and prove nothing.
-            if (!fanStart.current) { fanStart.current = Date.now(); fanWork.current = 0; fanRan.current = 0; }
+            if (!fanStart.current) { fanStart.current = Date.now(); fanWork.current = 0; fanRan.current = 0; fanDone.current = 0; }
             fanRan.current += 1;
           }
           setNode(d.node, "live");
@@ -132,7 +133,11 @@ export default function Buildyard() {
           setNode(d.node, "done", { ms: d.ms, text: d.text });
           if (fanout.current.includes(d.node)) {
             fanWork.current += (d.ms ?? 0) / 1000;
-            if (fanRan.current > 1) {          // one branch alone says nothing
+            fanDone.current += 1;
+            // Only once the whole round is home. A half-summed round reads
+            // "9.0s on the wall clock, 9.0s of work" — true, and an invitation to
+            // conclude that running them together bought nothing.
+            if (fanRan.current > 1 && fanDone.current >= fanRan.current) {
               setWork(fanWork.current);
               setWall((Date.now() - fanStart.current) / 1000);
             }

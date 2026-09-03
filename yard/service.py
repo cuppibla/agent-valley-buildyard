@@ -118,18 +118,18 @@ async def _run(request_text: str, sid: str, site: str | None = None):
     # fan-out and shrinks to whatever the inspector sent back: a rework only re-runs
     # the door, so "waiting 1 of 3" would be a lie the second time round.
     expected = len(topo["fanout"]) or 1
-    started: set[str] = set()
     landed: set[str] = set()
     t0 = time.monotonic()
     node_t0: dict[str, float] = {}
 
     def start(names):
+        """Start a node's clock. Called every time a node is entered, including the
+        second time round after a rework — a node that runs twice is timed twice."""
         out = []
         for n in names:
             if n in ("join",) or n.startswith("__"):
                 continue
             node_t0[n] = time.monotonic()
-            started.add(n)
             out.append(_sse("node.start", node=n, at=round(time.monotonic() - t0, 2)))
         return out
 
@@ -157,8 +157,17 @@ async def _run(request_text: str, sid: str, site: str | None = None):
             if not node:
                 continue
 
+            # An agent with a tool emits three events per turn — the call, the
+            # result, and the answer — and only the third is the node finishing.
+            # Counting all three had `stock` reporting six times across two rounds
+            # and inflating the "of work" total the crew line is measured from.
+            parts = (ev.content.parts if ev.content else []) or []
+            if any(getattr(p, "function_call", None) or getattr(p, "function_response", None)
+                   for p in parts):
+                continue
+
             text, image = "", None
-            for p in (ev.content.parts if ev.content else []) or []:
+            for p in parts:
                 if p.text and p.text.strip():
                     text = p.text.strip()
                 elif getattr(p, "inline_data", None) and p.inline_data.data:
@@ -199,7 +208,7 @@ async def _run(request_text: str, sid: str, site: str | None = None):
             else:
                 nxt = [e["to"] for e in topo["edges"]
                        if e["from"] == node and e["route"] is None]
-                for chunk in start(n for n in nxt if n not in started or n in topo["fanout"]):
+                for chunk in start(nxt):
                     yield chunk
     except Exception as exc:                       # noqa: BLE001
         log.exception("build failed")

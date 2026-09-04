@@ -22,6 +22,18 @@ uv run python scripts/preflight.py
 `.env.example` defaults to **Vertex AI**, so it picks up whatever project `gcloud` is
 pointed at — nothing to edit and no key to paste.
 
+**No project to point at?** Two scripts do the whole thing, and they are what the codelab
+runs:
+
+```bash
+./setup_project.sh    # finds or makes a billing-linked project
+./setup_codelab.sh    # enables Vertex AI, uv sync, writes .env, makes one real call
+```
+
+`setup_project.sh` looks for the project week one left behind before it creates anything,
+so coming from `agent-valley-lab` does not cost you a second billable project. Set
+`AGENT_VALLEY_NEW_PROJECT=1` if you want a fresh one anyway. Both are safe to re-run.
+
 Then two surfaces, each right before you need it:
 
 ```bash

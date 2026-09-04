@@ -43,6 +43,18 @@ export default function Buildyard() {
   const [fanoutNames, setFanoutNames] = useState<string[]>([]);
   const [topo, setTopo] = useState<Topo | null>(null);
   const [activeRoute, setActiveRoute] = useState<string | null>(null);
+  // The question the graph stopped on, if it is stopped. Its presence IS the paused
+  // state — there is no separate flag, because there is no way to be waiting without
+  // an interrupt id to answer with.
+  const [gate, _setGate] = useState<{ id: string; message: string } | null>(null);
+  const [note, setNote] = useState("");
+  // A ref beside the state: `consume` runs for the whole length of a stream and
+  // closes over whatever `gate` was when it started, so the state alone would be a
+  // second behind at exactly the moment it matters.
+  const gateRef = useRef<{ id: string; message: string } | null>(null);
+  const setGate = (g: { id: string; message: string } | null) => {
+    gateRef.current = g; _setGate(g);
+  };
   const sid = useRef<string>("");
   // Only the fan-out counts. Summing every node would compare 12s of parallel work
   // against a wall clock that also contains two image renders — a true number that
@@ -81,21 +93,10 @@ export default function Buildyard() {
   const setNode = (name: string, state: NodeState, extra: Partial<Crew> = {}) =>
     setCrew((c) => c.map((n) => (n.name === name ? { ...n, state, ...extra } : n)));
 
-  async function build(text?: string, forceSite?: string) {
-    const msg = (text ?? request).trim();
-    if (busy || !msg) return;
-    lastReq.current = msg;
-    setBusy(true); setRejected(false); setActiveRoute(null); setLine("Right. Crew!");
-    setPlan([]);
-    setEvents([]); setJoin(null); setWall(undefined); setWork(undefined);
-    setCrew((c) => c.map((n) => ({ ...n, state: "idle", ms: undefined })));
-
-    fanWork.current = 0; fanStart.current = 0; fanRan.current = 0; fanDone.current = 0;
-    const res = await fetch("/api/w2/build", {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ request: msg, session_id: sid.current || undefined,
-        site: forceSite || undefined }),
-    });
+  // One stream reader for both doors. A first build and an answer to a question are
+  // the same thing to the workflow — a message arriving on a session — so the
+  // browser reads them the same way too.
+  async function consume(res: Response) {
     const reader = res.body?.getReader();
     if (!reader) { setBusy(false); setLine("The yard agent isn't answering."); return; }
 
@@ -178,14 +179,75 @@ export default function Buildyard() {
           }
           setActiveRoute(d.route);
           push("route", `${d.from} → ${d.to} · ${d.route}`);
+        } else if (d.kind === "interrupt") {
+          // Not an error, and not the end. The run really has finished — the stream
+          // closes right after this — and the graph is still holding its place.
+          setGate({ id: d.interrupt_id, message: d.message || "Do you approve?" });
+          setNode(d.node, "waiting");
+          setLine(d.message || "Do you approve?");
+          push("interrupt", `${d.node} · waiting for you`);
         } else if (d.kind === "error") {
           setLine(d.message); push("error", d.message);
         } else if (d.kind === "done") {
-          setLine("That will stand. Sign it off.");
+          // Only speak if nobody is being asked anything. A `done` arrives right
+          // behind an interrupt too — the run is over, the question is not.
+          setLine((l) => (gateRef.current ? l : "The yard is closed."));
         }
       }
     }
-    setBusy(false); setRequest("");
+    setBusy(false);
+  }
+
+  // The other door. Same session, same stream, one field of difference: this
+  // message is an answer to a question the graph is already holding.
+  async function sign(ok: boolean) {
+    if (busy || !gate) return;
+    setBusy(true); setRejected(!ok); setActiveRoute(null);
+    setLine(ok ? "Signed." : "Right — I'll take it back to the crew.");
+    const answered = gate;
+    setGate(null);
+    if (ok) {
+      setNode("approve", "done");
+    } else {
+      // A send-back starts the whole crew again from the brief, so the board has to
+      // be cleared. Leaving the old greens up meant `approve` sat there saying
+      // "your turn" while the yard was busy doing what it had just been told.
+      setCrew((c) => c.map((n) => ({ ...n, state: "idle", ms: undefined })));
+      setJoin(null); setWall(undefined); setWork(undefined);
+      fanWork.current = 0; fanStart.current = 0; fanRan.current = 0; fanDone.current = 0;
+      setPlan((rows) => rows.map((r) => ({ ...r, stale: true })));
+    }
+    const res = await fetch("/api/w2/sign", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ session_id: sid.current, interrupt_id: answered.id,
+                             ok, note: note.trim() }),
+    });
+    setNote("");
+    await consume(res);
+  }
+
+  async function build(text?: string, forceSite?: string) {
+    const msg = (text ?? request).trim();
+    if (busy || !msg) return;
+    lastReq.current = msg;
+    setBusy(true); setRejected(false); setActiveRoute(null); setLine("Right. Crew!");
+    setGate(null); setNote(""); setPlan([]);
+    setEvents([]); setJoin(null); setWall(undefined); setWork(undefined);
+    setCrew((c) => c.map((n) => ({ ...n, state: "idle", ms: undefined })));
+
+    fanWork.current = 0; fanStart.current = 0; fanRan.current = 0; fanDone.current = 0;
+    // A build starts a new conversation. Reusing the last one would carry over the
+    // reviewer's spent rework and the note from the traveler's last change.
+    sid.current = "";
+    const res = await fetch("/api/w2/build", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ request: msg, site: forceSite || undefined }),
+    });
+    // Which conversation this turned out to be. Every answer from here on has to
+    // arrive on it, and the graph is the thing keeping its place inside it.
+    sid.current = res.headers.get("x-session-id") || "";
+    await consume(res);
+    setRequest("");
     updateSave({ stamps: [false, true, false, false, false] });
   }
 
@@ -264,8 +326,42 @@ export default function Buildyard() {
                 ))}
               </div>}
 
+          {/* The signature. It sits on the plan and not under the picture because the
+              plan is what is being signed — the picture is how you read it. While
+              this is on screen the workflow is genuinely stopped, holding an
+              interrupt id, and nothing moves until one of these two buttons is
+              pressed. There is no timer behind it. */}
+          {gate && (
+            <div style={{ marginTop: 13, paddingTop: 12, borderTop: "1px solid var(--line)" }}>
+              <div style={{ display: "flex", gap: 10, alignItems: "center",
+                flexWrap: "wrap", marginBottom: 9 }}>
+                <span className="mono" style={{ fontSize: 10.5, letterSpacing: ".1em",
+                  color: "var(--amber, #b98a2e)" }}>⏸ WAITING FOR YOU</span>
+                <span style={{ fontSize: 13, color: "var(--ink)" }}>{gate.message}</span>
+              </div>
+              <div style={{ display: "flex", gap: 9, alignItems: "center", flexWrap: "wrap" }}>
+                <button className="rune" onClick={() => sign(true)} disabled={busy}
+                  style={{ fontSize: 12, fontWeight: 600, borderColor: "#9fd8c4",
+                    color: "#2f7d67" }}>✓ sign the plan</button>
+                <input value={note} onChange={(e) => setNote(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter" && note.trim()) sign(false); }}
+                  placeholder="…or say what to change, and send it back"
+                  style={{ flex: "1 1 260px", minWidth: 200, fontSize: 13, padding: "7px 11px",
+                    borderRadius: 9, border: "1px solid var(--line)",
+                    background: "var(--paper, #fff)", color: "var(--ink)" }} />
+                <button className="rune" onClick={() => sign(false)}
+                  disabled={busy || !note.trim()} style={{ fontSize: 12,
+                    borderColor: "#e0b8c8", color: "#a33a60",
+                    opacity: note.trim() ? 1 : .45 }}>↩ send it back</button>
+              </div>
+              <div className="mono" style={{ fontSize: 10.5, color: "var(--faint)", marginTop: 8 }}>
+                the graph is stopped at <b>approve</b> · interrupt <b>{gate.id}</b>
+              </div>
+            </div>
+          )}
+
           {/* The experiment, one click. Same request, same crew, one variable moved. */}
-          {plan.length > 0 && !busy && Object.keys(sites).length > 1 && (
+          {plan.length > 0 && !busy && !gate && Object.keys(sites).length > 1 && (
             <div style={{ display: "flex", gap: 7, marginTop: 13, paddingTop: 11,
               borderTop: "1px solid var(--line)", flexWrap: "wrap", alignItems: "center" }}>
               <span className="mono" style={{ fontSize: 10.5, color: "var(--faint)",

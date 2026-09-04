@@ -1,10 +1,11 @@
 """The Buildyard — one graph, four shapes.
 
     START ─▶ survey ─▶ blueprint ─┬─▶ ground  ─┐
-                                  ├─▶ stock   ─┼─▶ join ─▶ render ─▶ inspect ─┬─▶ finish
-                                  └─▶ weather ─┘                    ▲         │
-                                                                    └─────────┘
-                                                                     "rework"
+                          ▲       ├─▶ stock   ─┼─▶ join ─▶ render ─▶ inspect
+                          │       └─▶ weather ─┘                       │
+                          │                             "rework" ◀─────┤
+                          │                                    "pass"  ▼
+                          └───────────── "change" ───────────────── approve ─▶ finish
 
 Everything in this file except the last statement is an ordinary agent or an
 ordinary function. The last statement is the chapter: three ways of saying what
@@ -13,6 +14,10 @@ runs next, in one list.
     a, b, c            a chain      — b runs after a
     (a, b, c)          a tuple      — all three run together
     {"x": a, "y": b}   a dict       — whichever route the node emitted
+
+There is no fourth shape. `approve` stops the graph and waits for a person, and
+then routes on the word they said — through the same dict `inspect` routes
+through. Human-in-the-loop is not a new mechanism; it is a different mouth.
 
 The three branches are deliberately three DIFFERENT KINDS of thing — a plain
 function, an agent with a tool, an agent with none — because a node is a slot, not
@@ -28,8 +33,10 @@ from typing import Any
 from google.adk import Agent, Event, Workflow
 from google.adk.agents.context import Context
 from google.adk.events import EventActions
-from google.adk.workflow import JoinNode
+from google.adk.events.request_input import RequestInput
+from google.adk.workflow import FunctionNode, JoinNode
 from google.genai import types
+from pydantic import BaseModel, Field
 
 from forge.agent.backends import shrink
 from yard import lookups
@@ -91,7 +98,14 @@ blueprint = Agent(
     instruction=(
         "You are handed a request for a small animal's home. Write the brief in ONE "
         "short sentence — who it is for and what it is for. Not materials, not "
-        "structure; the crew decides those.\n\nThe sentence and nothing else."
+        "structure; the crew decides those.\n\n"
+        # The `?` makes it optional: on the first pass there is no note in state and
+        # this line renders away to nothing. On a second pass it is the whole reason
+        # the yard is running again — which is how a sentence a person typed reaches
+        # the footing, the frame and the roof.
+        "If the following is not empty, the traveler saw the first design and asked "
+        "for a change. Work it into the brief: {note?}\n\n"
+        "The sentence and nothing else."
     ),
 )
 
@@ -273,8 +287,72 @@ async def inspect(ctx: Context, node_input: Any):
     else:
         yield Event(
             message=f"that will stand · {len(plan)} decisions signed off",
+            # The plan travels on. The next node has to show a person what they are
+            # being asked to sign, and a node only ever sees what the one before
+            # handed it — this is the same edge rule as chapter 2, still holding.
+            output=node_input if isinstance(node_input, dict) else None,
             actions=EventActions(route="pass"),
         )
+
+
+# ── the one node that waits ─────────────────────────────────────────────────
+SIGN = "yard:sign"
+
+
+class Signature(BaseModel):
+    """What the traveler sends back. A schema, not a sentence — the graph routes on
+    `ok`, so it cannot be a paragraph the code then has to interpret."""
+
+    ok: bool = Field(description="True to build it. False to send it back.")
+    note: str = Field("", description="If sending it back, what to change.")
+
+
+async def _approve(ctx: Context, node_input: Any):
+    """Stop, and wait for a person.
+
+    Read this next to `inspect`. Both nodes end by emitting one word, and the same
+    kind of dict decides what the word means. The only difference is where the word
+    comes from — and `RequestInput` is the whole of that difference: it hands the
+    question out, and the graph stops until an answer comes back.
+
+    The node runs twice. On the way in there is no answer, so it asks and returns.
+    Whenever the answer arrives — a second later or a day later, in a different
+    process — the node runs again with `ctx.resume_inputs` filled in, and this time
+    it falls through to the routing. That is why it is declared with
+    `rerun_on_resume=True` below: without it the body never runs a second time.
+    """
+    answer = ctx.resume_inputs.get(SIGN)
+
+    if answer is None:
+        yield RequestInput(
+            interrupt_id=SIGN,
+            message="The crew signed off on this. Do you?",
+            # What the person is being asked about, so a client has something to
+            # show. `adk web` renders it; the yard draws it as the plan and picture.
+            payload=node_input if isinstance(node_input, dict) else None,
+            response_schema=Signature,
+        )
+        return
+
+    if answer.get("ok"):
+        yield Event(message="signed — the yard can close",
+                    actions=EventActions(route="sign"))
+    else:
+        # No counter here, unlike the reviewer above. A person cannot loop forever
+        # by accident: every trip round costs them another answer, and the way out
+        # is the button they are already looking at.
+        note = (answer.get("note") or "").strip()
+        ctx.state["note"] = note
+        # A different brief deserves a fresh inspection. Without this the reviewer
+        # spends its one rework on the first design and then silently waves through
+        # everything the traveler asks for afterwards — a guard that is still in the
+        # graph and no longer doing anything.
+        ctx.state["reworks"] = 0
+        yield Event(message=f"sent back — {note or 'no reason given'}",
+                    actions=EventActions(route="change"))
+
+
+approve = FunctionNode(func=_approve, name="approve", rerun_on_resume=True)
 
 
 async def finish(node_input: Any):
@@ -297,5 +375,10 @@ root_agent = Workflow(
          #    next line. A dict is "whichever way the reviewer pointed".
 
          ),
+
+        # 👉 EDIT FOUR — chapter 5. Two changes. In the list above, change
+        #    `"pass": finish` to `"pass": approve`. Then add this whole line below:
+        #        (approve, {"sign": finish, "change": blueprint}),
+        #    `edges` is a LIST OF PATHS. Until now you have drawn one.
     ],
 )

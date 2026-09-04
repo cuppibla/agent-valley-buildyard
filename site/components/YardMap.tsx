@@ -13,7 +13,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
  * needs no caption.
  */
 
-export type NodeState = "idle" | "live" | "done" | "redo";
+// "waiting" is not a slower kind of "live". Nothing is running — the process has
+// finished and the graph is holding its place until a person answers. It gets its
+// own colour because that difference is the whole of chapter 5.
+export type NodeState = "idle" | "live" | "done" | "redo" | "waiting";
 export type Topo = { nodes: string[]; edges: { from: string; to: string; route: string | null }[];
   fanout: string[] };
 type Join = { have: number; of: number; done: boolean } | null;
@@ -31,6 +34,7 @@ const AVATAR: Record<string, string> = {
   // Week one's forgekeeper draws the picture here too, and Vesper signs it off.
   render: "/world/npc/maren.jpg",
   inspect: "/world/npc/twill.jpg",
+  approve: "/world/npc/odo.jpg",     // the yardmaster brings it to you himself
   finish: "/world/npc/vesper.jpg",
 };
 
@@ -94,7 +98,10 @@ export default function YardMap(
             const back = pos[e.to].x <= pos[e.from].x;
             const hot = e.route ? e.route === activeRoute
               : states[e.from] === "done" && (states[e.to] ?? "idle") !== "idle";
-            const c = e.route === "rework" ? "var(--rose)"
+            // Rose means "this one goes backwards", whichever word the reader
+            // labelled it with — the reviewer's "rework" and the traveler's
+            // "change" are the same move on the picture.
+            const c = back ? "var(--rose)"
               : hot ? "var(--violet)" : "var(--line-strong)";
             return (
               <path key={i} d={edgePath(pos[e.from], pos[e.to], back)} fill="none" stroke={c}
@@ -116,7 +123,8 @@ export default function YardMap(
                 clipPath={`url(#c-${r.key})`} />
               <circle cx={R} cy={R} r={R} fill="none" strokeWidth="2"
                 stroke={states[r.key] === "live" ? "var(--violet)"
-                  : states[r.key] === "redo" ? "var(--rose)" : "rgba(111,199,173,.9)"}
+                  : states[r.key] === "redo" ? "var(--rose)"
+                  : states[r.key] === "waiting" ? "#e6c069" : "rgba(111,199,173,.9)"}
                 style={{ transition: "stroke .3s" }} />
               {states[r.key] === "live" && (
                 <animateTransform attributeName="transform" type="translate" additive="sum"
@@ -146,6 +154,8 @@ function Card({ n, at, state, ms, join }:
       ? { b: "rgba(111,199,173,.8)", f: "rgba(111,199,173,.13)", t: "#2f7d67", bar: "var(--mint)" }
     : state === "redo"
       ? { b: "var(--rose)", f: "rgba(229,138,168,.12)", t: "#b03e64", bar: "var(--rose)" }
+    : state === "waiting"
+      ? { b: "#e6c069", f: "rgba(230,192,105,.16)", t: "#7a5a12", bar: "var(--gold, #e6c069)" }
     : state === "live"
       ? { b: "var(--violet)", f: "rgba(255,255,255,.95)", t: "var(--violet)", bar: "var(--violet-soft)" }
       : { b: "var(--line)", f: "rgba(255,255,255,.5)", t: "var(--faint)", bar: "var(--violet-soft)" };
@@ -153,9 +163,11 @@ function Card({ n, at, state, ms, join }:
   const label = join
     ? (join.done ? "branches joined" : `waiting · ${join.have} of ${join.of}`)
     : state === "done" ? (ms ? `${(ms / 1000).toFixed(1)}s` : "done")
-    : state === "redo" ? "again" : state === "live" ? "working…" : "—";
+    : state === "redo" ? "again" : state === "waiting" ? "your turn"
+    : state === "live" ? "working…" : "—";
   const pct = join ? (join.done ? 100 : (join.have / Math.max(join.of, 1)) * 100)
-    : state === "done" || state === "redo" ? 100 : state === "live" ? 62 : 0;
+    : state === "done" || state === "redo" ? 100
+    : state === "waiting" ? 88 : state === "live" ? 62 : 0;
   const gold = !!join?.done;
   const dim = state === "idle" && !join?.have && !gold;
 
@@ -183,8 +195,41 @@ function Card({ n, at, state, ms, join }:
 }
 
 /** Longest-path ranking, ignoring back edges so a loop cannot push a node rightwards. */
+// A back edge is one that points at a node you have already passed through. Find
+// them by their distance from START, not by their name and not by the order a walk
+// happens to take: this map draws the reader's OWN edges, chapter 5 adds a way back
+// called "change" rather than "rework", and a depth-first version of this put
+// `stock` after `inspect` — because the walk reached `inspect` down the `ground`
+// branch before it had ever seen `stock`.
+function backEdges(topo: Topo): Set<string> {
+  const out: Record<string, string[]> = {};
+  topo.edges.forEach((e) => { (out[e.from] ||= []).push(e.to); });
+
+  const depth: Record<string, number> = {};
+  const roots = topo.edges.some((e) => e.from === "__START__")
+    ? ["__START__"]
+    : topo.nodes.filter((n) => !topo.edges.some((e) => e.to === n));
+  let front = roots;
+  roots.forEach((n) => { depth[n] = 0; });
+  for (let d = 1; front.length; d++) {
+    const next: string[] = [];
+    front.forEach((n) => (out[n] || []).forEach((m) => {
+      if (depth[m] === undefined) { depth[m] = d; next.push(m); }
+    }));
+    front = next;
+  }
+
+  const back = new Set<string>();
+  topo.edges.forEach((e) => {
+    const a = depth[e.from], z = depth[e.to];
+    if (a !== undefined && z !== undefined && z <= a) back.add(`${e.from}\u0000${e.to}`);
+  });
+  return back;
+}
+
 function rank(topo: Topo) {
-  const fwd = topo.edges.filter((e) => !e.route || e.route !== "rework");
+  const back = backEdges(topo);
+  const fwd = topo.edges.filter((e) => !back.has(`${e.from}\u0000${e.to}`));
   const parents: Record<string, string[]> = {};
   topo.edges.forEach((e) => { (parents[e.to] ||= []).push(e.from); });
 

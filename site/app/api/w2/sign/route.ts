@@ -1,9 +1,8 @@
-// POST /api/w2/build — one build, streamed.
+// POST /api/w2/sign — the traveler's answer, streamed back.
 //
-// The body is passed straight through rather than buffered. Week one's routes read
-// the whole JSON reply before answering, which is fine for one picture and useless
-// here: a crew card that lights up only after the workflow returns has nothing to
-// teach. `duplex: "half"` is what lets fetch stream a request body in node.
+// Identical to the build route on purpose. To the workflow a first request and an
+// answer to a question are the same thing — a message arriving on a session — so
+// there is nothing here to do differently. `duplex: "half"` lets node stream it.
 
 import { NextRequest } from "next/server";
 
@@ -16,7 +15,7 @@ const AGENT_URL = process.env.VALLEY_AGENT_URL || "http://127.0.0.1:8100";
 export async function POST(req: NextRequest) {
   const body = await req.text();
   try {
-    const upstream = await fetch(`${AGENT_URL}/build`, {
+    const upstream = await fetch(`${AGENT_URL}/sign`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body,

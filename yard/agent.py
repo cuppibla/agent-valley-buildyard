@@ -366,13 +366,17 @@ root_agent = Workflow(
     edges=[
         ("START", survey,
 
-         # 👉 EDIT ONE — chapter 2. Add `blueprint,` on the next line, then save.
+         # 👉 EDIT ONE — chapter 2. Delete the "# " at the start of the next line,
+         #    then save, then restart (Ctrl+C, ↑, Enter) and ask for a plot again.
+         # blueprint,
 
-         # 👉 EDIT TWO — chapter 3. Add `(ground, stock, weather), join, render, inspect,`
-         #    on the next line. The brackets are the whole syntax of "at the same time".
+         # 👉 EDIT TWO — chapter 3. Delete the "# " at the start of the next line.
+         #    The brackets are the whole syntax of "at the same time".
+         # (ground, stock, weather), join, render, inspect,
 
-         # 👉 EDIT THREE — chapter 4. Add `{"rework": stock, "pass": finish},` on the
-         #    next line. A dict is "whichever way the reviewer pointed".
+         # 👉 EDIT THREE — chapter 4. Delete the "# " at the start of the next line.
+         #    A dict is "whichever way the reviewer pointed".
+         # {"rework": stock, "pass": finish},
 
          ),
 

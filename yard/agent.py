@@ -376,9 +376,12 @@ root_agent = Workflow(
 
          ),
 
-        # 👉 EDIT FOUR — chapter 5. Two changes. In the list above, change
-        #    `"pass": finish` to `"pass": approve`. Then add this whole line below:
+        # 👉 BEYOND THE LAB — the yard can stop and wait for a person. Two changes:
+        #    in the list above, point `"pass"` at `approve` instead of `finish`, then
+        #    add this whole line below:
         #        (approve, {"sign": finish, "change": blueprint}),
-        #    `edges` is a LIST OF PATHS. Until now you have drawn one.
+        #    Note that it takes a SECOND path. `edges` is a list of them, and a graph
+        #    that comes back on itself needs more than one. The yard app runs with
+        #    this wired; see `approve` above for how a node waits without blocking.
     ],
 )

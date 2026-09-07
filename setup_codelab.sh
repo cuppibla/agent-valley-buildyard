@@ -189,26 +189,42 @@ fi
 # ── 4 · prove the model answers ───────────────────────────────────────────────
 # The only check worth having: a real call to a real model over the credentials
 # this lab will actually use. Everything above is a guess until this line ticks.
+#
+# The model is read out of yard/agent.py rather than written here. This check
+# used to name gemini-2.5-flash while the lab ran gemini-3-flash-preview, which
+# made it worse than no check at all: access to the two is granted separately,
+# so a project that could reach 2.5 and not 3 got a green tick here and a 403 in
+# chapter one — precisely the failure this section exists to catch. One string,
+# one place, and grepping it costs nothing and imports nothing.
 say "4 · Live check"
+
+LAB_MODEL="$(sed -n 's/^MODEL = "\(.*\)"$/\1/p' yard/agent.py | head -1)"
+if [ -z "$LAB_MODEL" ]; then
+    LAB_MODEL="gemini-3-flash-preview"
+    warn "could not read MODEL from yard/agent.py — checking $LAB_MODEL instead"
+fi
 
 export GOOGLE_GENAI_USE_VERTEXAI="True"
 export GOOGLE_CLOUD_PROJECT="$PROJECT"
 export GOOGLE_CLOUD_LOCATION="global"
+export LAB_MODEL
 
 if CHECK_OUT="$(uv run python - <<'PY' 2>&1
+import os
+
 from google import genai
 from google.genai import types as gt
 
 client = genai.Client()
 r = client.models.generate_content(
-    model="gemini-2.5-flash",
+    model=os.environ["LAB_MODEL"],
     contents="Reply with exactly: the buildyard, ready to build.",
     config=gt.GenerateContentConfig(
         thinking_config=gt.ThinkingConfig(thinking_budget=0), temperature=0.0))
 print(r.text.strip())
 PY
 )"; then
-    tick "gemini-2.5-flash: $(printf '%s' "$CHECK_OUT" | tail -1)"
+    tick "$LAB_MODEL: $(printf '%s' "$CHECK_OUT" | tail -1)"
 else
     case "$CHECK_OUT" in
         *403*|*PERMISSION_DENIED*)
@@ -220,6 +236,25 @@ else
                 "  ./setup_codelab.sh" \
                 "" \
                 "It will reuse $PROJECT and pick up where this left off." \
+                "" \
+                "Vertex AI said:" \
+                "" \
+                "$CHECK_OUT"
+            ;;
+        *404*|*NOT_FOUND*|*not\ found*)
+            die "Vertex AI does not recognise $LAB_MODEL." \
+                "$LAB_MODEL is a PREVIEW model id, and preview ids get retired" \
+                "on a schedule that has nothing to do with this lab. If this" \
+                "codelab has been sitting on a shelf for a while, that is the" \
+                "likely cause and it is a one-line fix." \
+                "" \
+                "Find the current id:" \
+                "  https://cloud.google.com/vertex-ai/generative-ai/docs/models" \
+                "" \
+                "Then set it in yard/agent.py — this check reads the model from" \
+                "there, so the two cannot disagree:" \
+                "" \
+                "  MODEL = \"the-current-id\"" \
                 "" \
                 "Vertex AI said:" \
                 "" \

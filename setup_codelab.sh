@@ -2,8 +2,8 @@
 # The Buildyard — one-shot environment setup for the CODELAB (uv path).
 # Safe to re-run any number of times.
 #
-# Run ./setup_project.sh FIRST. That one finds or makes the project and puts
-# billing on it; this one turns that project into a working lab environment:
+# Run ./setup_project.sh FIRST. That one makes the project and puts billing on
+# it; this one turns that project into a working lab environment:
 #   • aiplatform.googleapis.com enabled on it
 #   • .venv built by uv, dependencies pinned by uv.lock
 #   • a root .env pointing the lab at Vertex AI on that project
@@ -67,9 +67,8 @@ fi
 
 if [ -z "$PROJECT" ]; then
     die "No Google Cloud project selected." \
-        "./setup_project.sh finds the project you used in week one — or makes" \
-        "a new one, links billing, and records the id in ~/project_id.txt." \
-        "Run it first:" \
+        "./setup_project.sh makes a project, links billing, and records the id" \
+        "in ~/project_id.txt. Run it first:" \
         "" \
         "  ./setup_project.sh" \
         "" \

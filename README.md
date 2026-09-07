@@ -26,13 +26,28 @@ pointed at — nothing to edit and no key to paste.
 runs:
 
 ```bash
-./setup_project.sh    # finds or makes a billing-linked project
+./setup_project.sh    # makes a fresh billing-linked project
 ./setup_codelab.sh    # enables Vertex AI, uv sync, writes .env, makes one real call
 ```
 
-`setup_project.sh` looks for the project week one left behind before it creates anything,
-so coming from `agent-valley-lab` does not cost you a second billable project. Set
-`AGENT_VALLEY_NEW_PROJECT=1` if you want a fresh one anyway. Both are safe to re-run.
+`setup_project.sh` makes a new `agent-valley-NNNN` project every time it runs. It does
+not reuse whatever is sitting in `~/project_id.txt`: every lab writes to that one file,
+so the ID in it is as likely to belong to some other codelab as to week one, and week two
+should not drop its resources into a stranger's project.
+
+Already have a project you want week two to use — week one's, or one you made by hand?
+Put it in the file and ask for reuse explicitly:
+
+```bash
+echo YOUR_PROJECT_ID > ~/project_id.txt
+AGENT_VALLEY_REUSE_PROJECT=1 ./setup_project.sh
+```
+
+In reuse mode the script takes that project (or scans for an `agent-valley-NNNN` one if
+the file is empty), checks billing is still linked, and creates nothing.
+
+`setup_codelab.sh` is safe to re-run. `setup_project.sh` is not, unless you pass
+`AGENT_VALLEY_REUSE_PROJECT=1` — a plain re-run makes a second project.
 
 Then two surfaces, each right before you need it:
 

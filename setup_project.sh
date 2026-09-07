@@ -1,19 +1,26 @@
 #!/usr/bin/env bash
-# The Buildyard — get a billing-linked Google Cloud project, and only make one
-# if you do not already have one.
+# The Buildyard — make a fresh billing-linked Google Cloud project for week two.
 #
 # Run this FIRST, before ./setup_codelab.sh. It leaves you with:
 #   • a project that exists, is billing-linked, and is old enough to serve
 #   • that project ID in ~/project_id.txt
 #   • that project set as gcloud's active project
 #
-# This is week two, so most people arrive here with a perfectly good project
-# from week one. Reuse is therefore the DEFAULT and not a fallback: the script
-# looks for that project before it considers creating anything, because it
-# cannot ask you and a wrong guess costs you a second billable project.
-# Set AGENT_VALLEY_NEW_PROJECT=1 to override and force a fresh one.
+# A NEW PROJECT IS THE DEFAULT. Week two starts clean even when you already
+# have a project sitting in ~/project_id.txt or in your project list. That file
+# is the single thing every earlier lab writes to, so whatever is in it is as
+# likely to belong to some other codelab as to week one — reusing it silently
+# drops week two's resources into a stranger's project, and the script cannot
+# ask you which one you meant. Making a project is cheap and unambiguous, so
+# that is what happens unless you say otherwise.
 #
-# Safe to re-run. A second run finds the same project and stops early.
+# Set AGENT_VALLEY_REUSE_PROJECT=1 to reuse instead: the script then takes the
+# project in ~/project_id.txt, or scans for one shaped like week one's
+# agent-valley-NNNN, and only creates something if neither turns up.
+#
+# NOT safe to re-run blind: a second plain run makes a second project. Re-run
+# with AGENT_VALLEY_REUSE_PROJECT=1 to pick up where the last one left off —
+# every error message below tells you this too.
 #
 # It never prompts. Every failure exits non-zero with a fix to try.
 set -euo pipefail
@@ -59,8 +66,9 @@ if [ -z "$(gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>/
         "  gcloud auth login"
 fi
 
-# ── 1 · reuse the project you already have ────────────────────────────────────
-# Two places to look, cheapest first:
+# ── 1 · reuse, but only when you ask for it ────────────────────────────────────
+# This whole section is skipped unless AGENT_VALLEY_REUSE_PROJECT is set.
+# When it is, two places to look, cheapest first:
 #   a. ~/project_id.txt — written by week one, and by every run of this script.
 #      A hiccup halfway through should not cost you a second project.
 #   b. your project list, for anything shaped like week one's agent-valley-NNNN.
@@ -119,9 +127,25 @@ REUSE_SOURCE=""     # "file" or "scan" — decides what we can honestly claim
 # away and leaving you with two empty projects.
 ADOPT_PROJECT=""
 
-if [ -n "${AGENT_VALLEY_NEW_PROJECT:-}" ]; then
-    info "AGENT_VALLEY_NEW_PROJECT is set — skipping reuse, creating a new project"
+# AGENT_VALLEY_NEW_PROJECT used to be the opt-in for this behaviour, and week
+# two's own output told people to set it. It is now what happens anyway, so
+# accept it without complaining rather than erroring at someone who followed
+# an older printout.
+if [ -n "${AGENT_VALLEY_NEW_PROJECT:-}" ] && [ -z "${AGENT_VALLEY_REUSE_PROJECT:-}" ]; then
+    info "AGENT_VALLEY_NEW_PROJECT is set — that is the default now, nothing to do"
+fi
+
+if [ -z "${AGENT_VALLEY_REUSE_PROJECT:-}" ]; then
+    info "making a new project — set AGENT_VALLEY_REUSE_PROJECT=1 to reuse an existing one instead"
+    if [ -f "$PROJECT_FILE" ]; then
+        PREVIOUS="$(tr -d '[:space:]' < "$PROJECT_FILE" || true)"
+        # Name it. Otherwise the next section quietly overwrites the file and
+        # the project it pointed at becomes unfindable to anyone who did not
+        # already know its ID.
+        [ -n "$PREVIOUS" ] && info "$PROJECT_FILE currently says $PREVIOUS — leaving that project alone, not reusing it"
+    fi
 else
+    info "AGENT_VALLEY_REUSE_PROJECT is set — looking for a project to reuse"
     if [ -f "$PROJECT_FILE" ]; then
         EXISTING="$(tr -d '[:space:]' < "$PROJECT_FILE" || true)"
         if [ -n "$EXISTING" ]; then
@@ -168,7 +192,7 @@ if [ -n "$REUSE" ]; then
     else
         tick "reusing $REUSE (exists, billing linked)"
     fi
-    info "no new project created; set AGENT_VALLEY_NEW_PROJECT=1 if you want a fresh one"
+    info "no new project created, because you asked for reuse; drop AGENT_VALLEY_REUSE_PROJECT for a fresh one"
     say "Project ready: $REUSE"
     printf '  Next:  ./setup_codelab.sh\n\n'
     exit 0
@@ -267,8 +291,11 @@ else
             "an organization that does not let you create projects." \
             "" \
             "At quota because of week one? Reuse that project instead — point" \
-            "this lab at it and re-run:" \
+            "this lab at it and re-run in reuse mode. Both lines matter: the" \
+            "file says which project, the variable says to honour it." \
+            "" \
             "       echo YOUR_WEEK_ONE_PROJECT_ID > ~/project_id.txt" \
+            "       AGENT_VALLEY_REUSE_PROJECT=1 ./setup_project.sh" \
             "" \
             "Otherwise create one by hand — it takes a minute:" \
             "  1. https://console.cloud.google.com/projectcreate" \
@@ -277,7 +304,7 @@ else
             "  4. tell this lab about it:" \
             "       echo YOUR_PROJECT_ID > ~/project_id.txt" \
             "       gcloud config set project YOUR_PROJECT_ID" \
-            "  5. re-run ./setup_project.sh — it will pick that project up"
+            "  5. AGENT_VALLEY_REUSE_PROJECT=1 ./setup_project.sh"
     fi
 
     tick "created $PROJECT_ID"
@@ -285,8 +312,8 @@ fi
 
 # ── 4 · link billing, record, and select ──────────────────────────────────────
 # Record the ID the moment the project exists, before anything below it can
-# fail. Every die() past this point tells you to re-run, and a re-run can only
-# keep that promise if the ID is already on disk.
+# fail. Every die() past this point tells you to re-run in reuse mode, and a
+# re-run can only keep that promise if the ID is already on disk.
 printf '%s\n' "$PROJECT_ID" > "$PROJECT_FILE"
 
 if ! LINK_ERR="$(gcloud billing projects link "$PROJECT_ID" \
@@ -296,9 +323,13 @@ if ! LINK_ERR="$(gcloud billing projects link "$PROJECT_ID" \
         "" \
         "$LINK_ERR" \
         "" \
-        "Link it in the console, then re-run this script (it will reuse the" \
-        "project, not make another one):" \
-        "  https://console.cloud.google.com/billing/linkedaccount?project=$PROJECT_ID"
+        "Link it in the console:" \
+        "  https://console.cloud.google.com/billing/linkedaccount?project=$PROJECT_ID" \
+        "" \
+        "Then re-run in reuse mode, so it picks $PROJECT_ID back up instead of" \
+        "creating a second one:" \
+        "" \
+        "  AGENT_VALLEY_REUSE_PROJECT=1 ./setup_project.sh"
 fi
 tick "billing linked"
 
@@ -313,7 +344,10 @@ if ! SELECT_ERR="$(gcloud config set project "$PROJECT_ID" 2>&1)"; then
         "" \
         "  gcloud config set project $PROJECT_ID" \
         "" \
-        "Then re-run ./setup_project.sh — it will reuse $PROJECT_ID."
+        "Then re-run in reuse mode, so it picks $PROJECT_ID back up instead of" \
+        "creating a second one:" \
+        "" \
+        "  AGENT_VALLEY_REUSE_PROJECT=1 ./setup_project.sh"
 fi
 tick "recorded in $PROJECT_FILE and set as the active gcloud project"
 
@@ -344,9 +378,10 @@ if [ "$ready" -ne 1 ]; then
         "Nothing is broken — new projects sometimes take longer than this to" \
         "propagate. Wait a minute, then run:" \
         "" \
-        "  ./setup_project.sh" \
+        "  AGENT_VALLEY_REUSE_PROJECT=1 ./setup_project.sh" \
         "" \
-        "It will reuse $PROJECT_ID rather than create another project."
+        "The variable matters here: without it this script makes a NEW project" \
+        "every time, and $PROJECT_ID is already paid for and nearly ready."
 fi
 
 tick "$PROJECT_ID is serving"
